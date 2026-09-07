@@ -1,5 +1,36 @@
-# 阶段 1 只编排 postgres；app 服务待阶段 2（FastAPI + 检索链路）再补 Dockerfile 与本文件一并启
+# 劳动争议智能合规助手 · Docker Compose
+# 两个服务：app（FastAPI）+ postgres（pgvector）
+# 启动：docker compose up -d
+# 冒烟：curl http://localhost:8000/docs
+# 停止：docker compose down（pgdata volume 保留，数据不丢）
+
 services:
+  app:
+    build: .
+    container_name: labor-app
+    ports:
+      - "8000:8000"
+    environment:
+      # Docker 内服务间通信用 service name 作为 host——不是 localhost
+      - DATABASE_URL=postgresql://labor:labor@postgres:5432/labor
+      - EMBEDDING_MODE=${EMBEDDING_MODE:-offline}
+      - EMBEDDING_DIM=${EMBEDDING_DIM:-1024}
+      - SILICONFLOW_API_KEY=${SILICONFLOW_API_KEY:-}
+      - SILICONFLOW_BASE_URL=${SILICONFLOW_BASE_URL:-https://api.siliconflow.cn/v1}
+      - SILICONFLOW_MODEL=${SILICONFLOW_MODEL:-BAAI/bge-m3}
+      - RERANK_MODE=${RERANK_MODE:-offline}
+      - RERANK_MODEL=${RERANK_MODEL:-BAAI/bge-reranker-v2-m3}
+      - RERANK_POOL=${RERANK_POOL:-30}
+      - LLM_MODE=${LLM_MODE:-offline}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com/v1}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-chat}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.0}
+    depends_on:
+      postgres:
+        condition: service_healthy  # 等数据库彻底就绪再启动 app
+    restart: unless-stopped
+
   postgres:
     image: pgvector/pgvector:pg16
     container_name: labor-pg

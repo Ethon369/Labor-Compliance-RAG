@@ -1,0 +1,22 @@
+# Docker 构建时排除——减小 context、避免把本地数据库/密钥打进镜像
+__pycache__/
+*.pyc
+.env
+.git/
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.claude/
+
+# 评测数据可在主机端跑，不进镜像
+eval/
+
+# 本地开发无关
+node_modules/
+*.md  # 保留 README.md（被 README.md 覆盖）——只在根目录排除非 README 的 md
+!README.md
+
+# 容器内不需要的测试
+tests/

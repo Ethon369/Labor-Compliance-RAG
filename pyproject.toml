@@ -24,6 +24,15 @@ dev = [
 ]
 
 # fetch/解析脚本刻意零第三方依赖（urllib + 标准库正则），理由见 docs/decisions/01
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*", "eval*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
