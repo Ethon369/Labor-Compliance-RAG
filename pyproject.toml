@@ -13,6 +13,9 @@ dependencies = [
     "rank-bm25>=0.2",
     # 阶段 4：LangGraph 流程编排（Agent 编排，锁定清单内）；其基座 langchain-core 为传递依赖
     "langgraph>=1.2",
+    # 阶段 6：FastAPI + uvicorn（Web 服务 + SSE 流式接口）
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
 ]
 
 [project.optional-dependencies]
