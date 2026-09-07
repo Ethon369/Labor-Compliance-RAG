@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 环境变量：.env.example 提交，真实密钥只在本地 .env
+.env
+
+# 测试与工具缓存
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 数据
+# 原始 HTML 快照体积大、可随时重新抓取，不入库；解析产物 JSON（data/raw/*.json）入库
+data/raw/sources/
+
+# 探路产物（本次阶段开发中下载的镜像页，保留到人工复核后删除）
+.probe/
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

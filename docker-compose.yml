@@ -1,0 +1,21 @@
+# 阶段 1 只编排 postgres；app 服务待阶段 2（FastAPI + 检索链路）再补 Dockerfile 与本文件一并启
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: labor-pg
+    environment:
+      POSTGRES_USER: labor
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-labor}
+      POSTGRES_DB: labor
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U labor -d labor"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

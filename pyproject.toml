@@ -1,0 +1,28 @@
+[project]
+name = "labor-compliance-rag"
+version = "0.1.0"
+description = "劳动争议智能合规助手：基于中国劳动法律体系的 RAG 问答系统（个人求职展示项目）"
+requires-python = ">=3.11"
+dependencies = [
+    # 条款级切分入库需要 PG 驱动；psycopg3 为锁定技术栈 PostgreSQL 的配套，见 docs/decisions/02
+    "psycopg[binary]>=3.2",
+    # 配置与数据校验：所有 DB 连接串、后续 API key 一律经环境变量 + Pydantic settings 读取
+    "pydantic>=2.10",
+    "pydantic-settings>=2.6",
+    # 混合检索的稀疏路（BM25），锁定清单内；其传递依赖 numpy 由 pip 自动带入
+    "rank-bm25>=0.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+]
+
+# fetch/解析脚本刻意零第三方依赖（urllib + 标准库正则），理由见 docs/decisions/01
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+markers = [
+    "db: 需要 labor-pg 真库的集成测试（连不上自动跳过，离线环境不影响全绿）",
+]
