@@ -26,10 +26,12 @@ from app.agent.protocol import (
     QueryRewriter,
     RetrievalProtocol,
     TemplateAnswerer,
+    ToolCallingAnswerer,
 )
 from app.agent.state import AgentInput, AgentState
 from app.agent.verify import CitationVerifier
 from app.core.config import Settings
+from app.tools.registry import default_registry
 
 
 def build_agent(
@@ -80,8 +82,11 @@ def build_agent_from_config(
             base_url=settings.llm_base_url,
             temperature=settings.llm_temperature,
         )
-        answerer: AnswerGenerator | None = LLMAnswerer(
+        # LLM 模式下注册经济补偿金计算器，LLM 判断需要时自动调用
+        tools = default_registry()
+        answerer: AnswerGenerator | None = ToolCallingAnswerer(
             api_key=api_key,
+            tools_registry=tools,
             model=settings.llm_model,
             base_url=settings.llm_base_url,
             temperature=settings.llm_temperature,

@@ -271,14 +271,16 @@ def test_build_from_config_llm_mode_requires_key():
 
 
 def test_build_from_config_llm_mode_with_key():
-    """llm 模式有 key 时 graph 应正常编译（mock _call_chat 而非 urlopen——避免 BytesIO 上下文管理问题）。
+    """llm 模式有 key 时 graph 应正常编译。
 
-    注意 graph 走两遍 LLM：rewrite → verify → answer。side_effect 按顺序给返回值。
+    rewrite 节点走 _call_chat，answer 节点走 ToolCallingAnswerer → _call_chat_with_tools。
+    需同时 mock 两个函数。与阶段 5 之前不同：answer 换成了 ToolCallingAnswerer（带工具注册）。
     """
-    with patch("app.agent.protocol._call_chat", side_effect=[
-        "延长工作时间 工资报酬",  # 改写结果，与 OVERTIME 文本共词 → verify 通过
-        "根据劳动法第44条应当支付150%的加班费",  # 回答结果
-    ]):
+    with (
+        patch("app.agent.protocol._call_chat", return_value="延长工作时间 工资报酬"),
+        patch("app.agent.protocol._call_chat_with_tools",
+              return_value="根据劳动法第44条应当支付150%的加班费"),
+    ):
         graph = build_agent_from_config(
             FakeRetriever([OVERTIME]),
             FakeSettings("llm", llm_api_key="sk-test"),

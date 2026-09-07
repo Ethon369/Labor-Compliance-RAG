@@ -1,17 +1,20 @@
-"""Agent 的三块可替换能力 + 离线默认实现 + LLM 实现。
+"""Agent 的三块可替换能力 + 离线默认实现 + LLM 实现 + function calling。
 
 与检索层 Reranker/Embedder 同一套路：Graph 面向 Protocol 编程，能力对象由"组装点"
 注入。真检索（PG HybridRetriever）、真 LLM（改写/回答）都能在 build_agent 时换上；
 离线默认让全链路在"无 key、无 DB"下端到端可跑、可测、可复现——求职演示与 CI 都要它。
-见决策 05。
+见决策 05/06。
 
 LLM 改写/回答走 urllib（与 SiliconFlowEmbedder 同模式），不引入 requests/httpx——
-项目锁定清单里没有它们，urllib 够用且零额外依赖。"""
+项目锁定清单里没有它们，urllib 够用且零额外依赖。
+ToolCallingAnswerer 内部处理 function calling 循环：LLM 判断需要工具时自动调用，
+结果反馈后再让 LLM 融入回答——这条循环对 Graph 透明，Graph 看到的是"回答器只返回文本"。
+"""
 from __future__ import annotations
 
 import json
 import urllib.request
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.rag.models import FusedHit, RetrievalResult
 
@@ -56,7 +59,7 @@ class TemplateAnswerer:
         return "可参考以下条文：\n" + "\n".join(lines)
 
 
-# ---- LLM 实现（OpenAI 兼容 chat/completions，urllib 直连） ----
+# ---- 基础 LLM 调用（urllib 直连） ----
 
 
 def _call_chat(
@@ -172,3 +175,143 @@ class LLMAnswerer:
             self._endpoint, self._api_key, self._model,
             messages, self._temperature,
         ).strip()
+
+
+# ---- LLM 实现（带 function calling 工具调用循环） ----
+
+
+_TOOL_ANSWER_SYSTEM = (
+    "你是劳动争议智能合规助手。你的回答必须严格基于以下检索到的法律条文原文。"
+    "如果条文能回答用户的问题，请组织一段清晰、易懂的回答，并在每个结论后"
+    "注明引用的法条出处（例如: 根据《劳动法》第44条）。"
+    "当问题涉及经济补偿金/赔偿金的具体金额计算时，使用 calculate_compensation 工具"
+    "进行计算，然后将计算结果自然地融入回答中。"
+    "不要编造条文里没有的结论，不要给出法律意见——你只是帮用户理解条文。"
+    "回答字数控制在 300 字以内，通俗易懂。"
+)
+
+
+def _call_chat_with_tools(
+    endpoint: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    tool_caller: Any,  # ToolRegistry，有 .call(name, args) 方法
+    temperature: float = 0.0,
+    max_rounds: int = 5,
+    timeout: int = 60,
+) -> str:
+    """带 function calling 的对话循环：发 tools schemas → LLM 可能返回 tool_calls → 执行 → 回传。
+
+    最多 max_rounds 轮（model→tool_calls→results→model→...），耗尽后倒序扫 messages
+    找最后一条 assistant content。每轮收到的 tool_calls 全部执行，结果合并为 tool 角色消息追加。
+
+    为什么不用 LangChain agent：本项目"仅用 LangChain 基础组件"，urllib 直连
+    是更轻更透明的落点。见决策 06。
+    """
+    for _round in range(max_rounds):
+        body = json.dumps({
+            "model": model,
+            "messages": messages,
+            "tools": tools,
+            "temperature": temperature,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            endpoint,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+
+        choice = payload["choices"][0]
+        msg = choice["message"]
+
+        # LLM 以文本回答（无 tool_calls）→ 直接返回
+        if msg.get("content") and not msg.get("tool_calls"):
+            return msg["content"].strip()
+
+        # LLM 要求调用工具
+        tool_calls = msg.get("tool_calls", [])
+        if not tool_calls:
+            return (msg.get("content") or "").strip()
+
+        # 把 LLM 的 assistant 消息追加到 messages（含 tool_calls 信息）
+        messages.append(msg)
+
+        # 逐一执行工具调用，结果打包为 tool 角色消息
+        for tc in tool_calls:
+            fn_info = tc["function"]
+            fn_name = fn_info["name"]
+            fn_args = json.loads(fn_info["arguments"])
+            try:
+                result = tool_caller.call(fn_name, fn_args)
+                # Pydantic 模型 → dict，便于 LLM 理解
+                if hasattr(result, "model_dump"):
+                    result_str = json.dumps(result.model_dump(), ensure_ascii=False)
+                else:
+                    result_str = json.dumps(result, ensure_ascii=False)
+            except KeyError:
+                result_str = json.dumps(
+                    {"error": f"工具 '{fn_name}' 未注册"}, ensure_ascii=False
+                )
+            except Exception as exc:
+                result_str = json.dumps({"error": str(exc)}, ensure_ascii=False)
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "content": result_str,
+            })
+
+    # max_rounds 耗尽：取最后一条 assistant 的 content
+    for msg in reversed(messages):
+        if msg.get("role") == "assistant" and msg.get("content"):
+            return msg["content"].strip()
+    return "无法完成计算，请重新描述您的问题。"
+
+
+class ToolCallingAnswerer:
+    """带 function calling 的 LLM 回答器：LLM 判断需要工具时自动调用，结果反馈后继续生成回答。
+
+    与 LLMAnswerer 的区别：发给 LLM 的请求带上 tools schemas，
+    响应处理支持 tool_calls 字段，形成闭环（LLM→计算→结果→LLM）。
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        tools_registry,  # ToolRegistry
+        model: str = "deepseek-chat",
+        base_url: str = "https://api.deepseek.com/v1",
+        temperature: float = 0.0,
+        max_rounds: int = 5,
+    ):
+        if not api_key:
+            raise ValueError("llm 模式需要 LLM_API_KEY")
+        self._api_key = api_key
+        self._tools_registry = tools_registry
+        self._model = model
+        self._endpoint = f"{base_url.rstrip('/')}/chat/completions"
+        self._temperature = temperature
+        self._max_rounds = max_rounds
+
+    def generate(self, query: str, hits: list[FusedHit]) -> str:
+        article_lines: list[str] = []
+        for h in hits:
+            article_lines.append(f"《{h.law_id}》第{h.article_no}条：{h.text}")
+        articles = "\n".join(article_lines) if article_lines else "（未检索到相关条文）"
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": _TOOL_ANSWER_SYSTEM},
+            {"role": "user", "content": _ANSWER_USER_TPL.format(query=query, articles=articles)},
+        ]
+        return _call_chat_with_tools(
+            self._endpoint, self._api_key, self._model,
+            messages, self._tools_registry.tool_schemas(),
+            self._tools_registry,
+            self._temperature, self._max_rounds,
+        )

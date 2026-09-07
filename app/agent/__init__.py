@@ -13,6 +13,7 @@ from app.agent.protocol import (
     QueryRewriter,
     RetrievalProtocol,
     TemplateAnswerer,
+    ToolCallingAnswerer,
 )
 from app.agent.state import AgentAnswer, AgentInput, AgentState, Citation
 from app.agent.verify import CitationVerifier
