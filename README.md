@@ -9,24 +9,39 @@
 
 ## 现在能做到哪一步
 
-项目按阶段推进。已完成：**阶段 1 数据管道**、**阶段 2 第一块（混合检索）**：
+项目按阶段推进。已完成：**阶段 1 数据管道**、**阶段 2（混合检索）**、**阶段 3（rerank + 评测）**：
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | 1 | 法条全文获取 + 条款级切分入库（PostgreSQL） | ✅ 完成 |
 | 2a | 混合检索：pgvector 向量路 + BM25 稀疏路 + RRF 融合 | ✅ 完成 |
-| 2b | FastAPI 服务 + bge-reranker 精排 | ⏳ 下一个 |
-| 3 | LangGraph Agent 编排（问题理解 → 检索 → 引用核验） | 🔜 |
+| 2b | 检索编排完整化（reranker 接入 + 精排管道） | ✅ 完成 |
+| 3 | bge-reranker 精排 + 评测框架（50 问 + 召回率/命中率对比） | ✅ 完成 |
+| 4 | FastAPI 服务 / LangGraph Agent 编排（问题理解 → 检索 → 引用核验） | 🔜 |
 
 阶段 1 交付：把《劳动法》（2018 修正现行版，107 条）与《劳动合同法》（2012 修正
 现行版，98 条）的全文解析成 `法名 / 条号 / 条文` 结构化数据，**一条法律条文 = 一行**
 入库 PostgreSQL，管线全自动自校验。
 
-阶段 2a 交付：`app/rag/` 混合检索——同一查询走两条路各取候选，再按**排序位置**（而非
+阶段 2 交付：`app/rag/` 混合检索——同一查询走两条路各取候选，再按**排序位置**（而非
 分数）做 RRF 融合：pgvector `<=>` 余弦近邻（稠密、抓语义）+ rank-bm25（稀疏、抓词面）。
 全链路离线可跑可测：embedding 用确定性占位向量打通 pgvector/SQL/融合，接口预留真
-bge-m3（硅基流动 API），填 key 重灌即换，表结构不动。`pytest` **51 个用例全绿**，含
-4 组「查询 → 应得条款」的真库两路召回验收。
+bge-m3（硅基流动 API），填 key 重灌即换，表结构不动。
+
+阶段 3 交付：**rerank 精排 + 评测框架**——RRF 融合出一个更大候选池（默认 30）后交给
+reranker 成对语义精排（离线占位 / 真 bge-reranker 二选一），再把 top-k 可见结果排出来。
+同时新增 `eval/` 评测套件：50 条劳动争议场景问答集，用 **Recall@k 与 Hit Rate@k** 双指标
+输出「纯向量 / 纯BM25 / 混合 / 混合+rerank」对比表，实测（离线占位，top-8）：
+
+| 方法 | Recall@8 | HitRate@8 |
+|---|---|---|
+| 纯向量 | 0.635 | 0.679 |
+| 纯BM25 | 0.789 | 0.830 |
+| 混合(RRF) | 0.742 | 0.793 |
+| 混合+rerank | **0.815** | **0.849** |
+
+`pytest` 全绿（含新增 rerank / eval 用例）；评测可 `python eval/runner.py --top-k 8` 复跑。
+指标定义与「rerank 收益从哪来」的分析见 [docs/decisions/04](docs/decisions/04-rerank与评测.md)。
 
 ## 技术栈
 
@@ -73,7 +88,7 @@ cp .env.example .env
 # 4) 用已提交的解析结果入库（会建表 + upsert，可重复执行）
 python scripts/ingest_laws.py
 
-# 5) 跑测试（51 个用例；无 DB 时 @pytest.mark.db 集成测试自动跳过，仍全绿）
+# 5) 跑测试（75 个用例；无 DB 时 @pytest.mark.db 集成测试自动跳过，仍全绿）
 pytest tests/ -v
 ```
 
@@ -88,18 +103,25 @@ python scripts/ingest_laws.py --dry-run   # 只打印入库计划，不碰数据
 ## 目录结构
 
 ```
-app/            # FastAPI 应用骨架；rag/ 已实现混合检索，api/core/agent/tools 待填充
-  rag/          # 混合检索（阶段 2a）：pgvector 向量路 + BM25 + RRF 融合
+app/            # FastAPI 应用骨架；rag/ 已实现混合检索 + rerank 精排，api/core/agent/tools 待填充
+  rag/          # 混合检索（阶段 2a/3）：pgvector 向量路 + BM25 + RRF 融合 + rerank 精排
 scripts/
   fetch_laws.py # 抓取 + 解析 + 自校验（现行性哨兵硬断言）→ data/raw/*.json（纯标准库）
   ingest_laws.py# 校验 JSON → 建表 → 条款级 upsert 入库
   backfill_embeddings.py  # 给 articles 灌 embedding 向量（幂等；--force 全量重灌）
 data/raw/       # 解析产物（git 提交）：labor_law.json(107) / labor_contract_law.json(98)
-tests/          # 51 用例；fetch/rag 单测离线，检索真库验收标 @pytest.mark.db
+eval/           # 评测框架（阶段 3）：50 问问答集 + Recall@k/HitRate@k 指标 + 对比表
+                #   python eval/runner.py --top-k 8   复跑「纯向量 vs 混合 vs 混合+rerank」
+tests/          # 75 用例；fetch/rag/eval 单测离线，检索真库验收标 @pytest.mark.db
 docs/
   PRD.md
-  decisions/    # 01 数据获取与切分 / 02 入库表结构 / 03 混合检索与RRF融合 —— 每个取舍都写了"备选 + 为什么"
+  decisions/    # 01 数据获取与切分 / 02 入库表结构 / 03 混合检索与RRF融合 / 04 rerank与评测 —— 每个取舍都写了"备选 + 为什么"
 ```
+
+## 沟通约定
+
+- **对话语言**：与 Claude Code 交互尽量使用中文。代码注释、文档、技术决策记录也以中文为主（关键术语保留英文）。
+- 项目作者会追问设计细节——回答时像导师带学生一样讲清楚"为什么"，不敷衍。
 
 ## 工程规范
 

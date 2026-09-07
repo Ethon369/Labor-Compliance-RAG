@@ -11,6 +11,8 @@ dependencies = [
     "pydantic-settings>=2.6",
     # 混合检索的稀疏路（BM25），锁定清单内；其传递依赖 numpy 由 pip 自动带入
     "rank-bm25>=0.2",
+    # 阶段 4：LangGraph 流程编排（Agent 编排，锁定清单内）；其基座 langchain-core 为传递依赖
+    "langgraph>=1.2",
 ]
 
 [project.optional-dependencies]

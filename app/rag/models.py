@@ -23,7 +23,11 @@ class LaneHit(BaseModel):
 
 
 class FusedHit(BaseModel):
-    """RRF 融合后的结果：命中它的路、融合分、以及定位回语料的完整条文。"""
+    """RRF 融合后的结果：命中它的路、融合分、以及定位回语料的完整条文。
+
+    rrf_score 始终保留原始 RRF 分（用于排序的可解释性）；rerank_score 仅
+    在精排路径有值——保留两列便于评测时分析 rerank 对排序的改变幅度。
+    """
 
     law_id: str
     article_no: int
@@ -31,6 +35,7 @@ class FusedHit(BaseModel):
     text: str
     lanes: list[str]  # 例 ["bm25", "vector"]：哪些路把它带进了候选
     rrf_score: float
+    rerank_score: float | None = None
 
 
 class RetrievalResult(BaseModel):
