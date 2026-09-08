@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api.auth import ensure_user_schema, router as auth_router
 from app.api.models import ErrorResponse
 from app.api.routes import router as chat_router
 from app.agent.graph import build_agent_from_config
@@ -28,6 +29,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
     retriever = build_retriever(settings)
     agent = build_agent_from_config(retriever, settings)
+    # 认证 + 登录用户历史两张表（幂等，启动可反复执行）
+    ensure_user_schema(settings.database_url)
     _app.state.settings = settings
     _app.state.retriever = retriever
     _app.state.agent = agent
@@ -51,6 +54,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
 app.include_router(chat_router)
 
 # 挂载静态前端：放在路由之后，避免抢占 /docs、/chat 等路径。

@@ -16,7 +16,7 @@
     --text-muted: #6b7280;
     --border: #e5e7eb;
     --user-bubble: #4f46e5;
-    --assistant-bubble: #f7f8fa;   /* 白底上助手气泡用浅灰区分，否则看不清 */
+    --assistant-bubble: #f7f8fa;
     --progress-bubble: #eef0f3;
     --radius: 12px;
     --shadow: 0 1px 3px rgba(0,0,0,.08);
@@ -26,7 +26,7 @@
 
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
-    background: var(--sidebar-bg);   /* 外层用侧边栏灰打底，避免滚动断层露白 */
+    background: var(--sidebar-bg);
     color: var(--text);
     height: 100vh; display: flex;
   }
@@ -47,6 +47,10 @@
   .new-chat:hover { border-color: var(--primary); }
   .history-title { font-size: 12px; color: var(--text-muted); padding: 10px 8px 4px; }
   .history-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+  .history-empty {
+    padding: 16px 8px; font-size: 13px; color: var(--text-muted);
+    text-align: center; line-height: 1.6;
+  }
   .history-item {
     padding: 8px 10px; border-radius: 8px; font-size: 14px; cursor: pointer;
     color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -54,7 +58,23 @@
   }
   .history-item:hover { background: #e9eaee; }
   .history-item.active { background: #fff; color: var(--text); box-shadow: var(--shadow); }
-  .sidebar .foot { font-size: 11px; color: var(--text-muted); padding: 8px; border-top: 1px solid var(--border); }
+
+  /* 左下角登录区 */
+  .auth-area {
+    border-top: 1px solid var(--border); padding: 12px 8px 4px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .auth-btn {
+    background: #fff; border: 1px solid var(--border); border-radius: 10px;
+    padding: 9px 12px; font-size: 14px; cursor: pointer; text-align: center;
+    transition: border-color .15s;
+  }
+  .auth-btn:hover { border-color: var(--primary); }
+  .auth-user {
+    font-size: 13px; color: var(--text-muted); padding: 4px 8px;
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  }
+  .auth-user .logout-btn { color: var(--primary); cursor: pointer; font-size: 12px; }
 
   /* ---- 右侧主区（纯白）---- */
   .main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
@@ -74,31 +94,28 @@
     display: flex; flex-direction: column; gap: 16px;
   }
 
-  /* 消息气泡通用 */
   .msg { display: flex; flex-direction: column; max-width: 80%; animation: fadeIn .25s ease; }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
   .msg.user { align-self: flex-end; }
   .msg.assistant { align-self: flex-start; }
   .msg .label { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
   .msg.user .label { text-align: right; }
-  .msg .bubble { padding: 12px 16px; border-radius: var(--radius); line-height: 1.65; font-size: 15px; word-break: break-word; }
+  .msg .bubble { padding: 12px 16px; border-radius: var(--radius); line-height: 1.65; font-size: 15px; word-break: break-word; white-space: pre-wrap; }
   .msg.user .bubble { background: var(--user-bubble); color: #fff; border-bottom-right-radius: 4px; }
   .msg.assistant .bubble { background: var(--assistant-bubble); color: var(--text); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
   .msg.progress .bubble { background: var(--progress-bubble); color: var(--text-muted); border: 1px dashed var(--border); font-size: 14px; }
 
-  /* 引用区 */
   .citations { margin-top: 10px; padding: 10px 14px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; font-size: 13px; }
   .citations summary { cursor: pointer; font-weight: 600; color: #166534; }
   .citations ul { margin-top: 6px; padding-left: 18px; }
   .citations li { margin-bottom: 4px; color: var(--text); }
   .citations code { background: #d1fae5; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
 
-  /* 欢迎区（空状态）：白色背景上靠卡片边框/阴影分隔 */
+  /* 欢迎区（空状态） */
   .welcome { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; }
   .welcome .card {
     background: var(--card); border: 1px solid var(--border); border-radius: 18px;
-    padding: 40px 48px; box-shadow: var(--shadow); text-align: center;
-    max-width: 640px;
+    padding: 40px 48px; box-shadow: var(--shadow); text-align: center; max-width: 640px;
   }
   .welcome .icon { font-size: 52px; margin-bottom: 14px; }
   .welcome h2 { font-size: 20px; margin-bottom: 8px; color: var(--text); }
@@ -129,24 +146,52 @@
   .input-area button:hover { background: var(--primary-hover); }
   .input-area button:disabled { opacity: .5; cursor: not-allowed; }
 
+  /* ---- 登录/注册弹窗 ---- */
+  .modal-mask {
+    position: fixed; inset: 0; background: rgba(15,23,42,.45);
+    display: none; align-items: center; justify-content: center; z-index: 100;
+  }
+  .modal-mask.open { display: flex; }
+  .modal {
+    background: #fff; border-radius: 16px; padding: 28px 32px; width: 340px;
+    box-shadow: 0 10px 40px rgba(0,0,0,.15);
+  }
+  .modal h3 { font-size: 18px; margin-bottom: 16px; }
+  .modal .switch { display: flex; gap: 8px; margin-bottom: 16px; }
+  .modal .switch button {
+    flex: 1; padding: 8px; border: 1px solid var(--border); background: #fff;
+    border-radius: 8px; cursor: pointer; font-size: 14px; color: var(--text-muted);
+  }
+  .modal .switch button.active { border-color: var(--primary); color: var(--primary); background: #eef2ff; }
+  .modal input {
+    width: 100%; border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 14px; font-size: 14px; margin-bottom: 10px; outline: none;
+  }
+  .modal input:focus { border-color: var(--primary); }
+  .modal .submit {
+    width: 100%; background: var(--primary); color: #fff; border: none;
+    border-radius: 10px; padding: 11px; font-size: 15px; font-weight: 600; cursor: pointer;
+  }
+  .modal .submit:hover { background: var(--primary-hover); }
+  .modal .err { color: #dc2626; font-size: 13px; margin-bottom: 8px; min-height: 18px; }
+  .modal .close { position: absolute; top: 14px; right: 18px; cursor: pointer; color: var(--text-muted); font-size: 18px; }
+
   @media (max-width: 768px) { .sidebar { display: none; } }
 </style>
 </head>
 <body>
 
-<!-- 左侧边栏（浅灰）：新对话 + 会话列表占位。B-3 再接 /chat/history 填真数据 -->
+<!-- 左侧边栏（浅灰）：新对话 + 用户历史（登录后） + 左下角登录区 -->
 <aside class="sidebar">
   <div class="brand"><span class="logo">⚖️</span>劳动合规 RAG</div>
   <button class="new-chat" onclick="newChat()">＋ 新对话</button>
-  <div class="history-title">最近会话</div>
+  <div class="history-title" id="historyTitle">历史会话</div>
   <div class="history-list" id="historyList">
-    <div class="history-item active" data-is-new="1" onclick="selectHistory(this)">新对话</div>
-    <div class="history-item" onclick="selectHistory(this)">公司拖欠我加班费怎么办</div>
-    <div class="history-item" onclick="selectHistory(this)">被辞退后经济补偿金怎么算</div>
-    <div class="history-item" onclick="selectHistory(this)">公司能收押金或扣身份证吗</div>
-    <div class="history-item" onclick="selectHistory(this)">试用期最长可以约定多久</div>
+    <div class="history-empty">未登录状态，提问记录仅在当前页面保留。<br>登录后可长期保存并回看。</div>
   </div>
-  <div class="foot">会话列表 · 待接入历史接口</div>
+  <div class="auth-area" id="authArea">
+    <button class="auth-btn" id="authBtn" onclick="openAuth()">登录 / 注册</button>
+  </div>
 </aside>
 
 <div class="main">
@@ -178,32 +223,185 @@
   </form>
 </div>
 
+<!-- 登录/注册弹窗 -->
+<div class="modal-mask" id="authModal">
+  <div class="modal" style="position:relative">
+    <span class="close" onclick="closeAuth()">✕</span>
+    <h3 id="modalTitle">登录</h3>
+    <div class="switch">
+      <button id="tabLogin" class="active" onclick="switchTab('login')">登录</button>
+      <button id="tabRegister" onclick="switchTab('register')">注册</button>
+    </div>
+    <div class="err" id="authErr"></div>
+    <input id="authUser" type="text" placeholder="用户名（2-32 位）" autocomplete="username">
+    <input id="authPass" type="password" placeholder="密码（4-64 位）" autocomplete="current-password">
+    <button class="submit" id="authSubmitBtn" onclick="submitAuth()">登录</button>
+  </div>
+</div>
+
 <script>
 // ===== DOM 引用 =====
 const chatArea = document.getElementById('chatArea');
 const welcome   = document.getElementById('welcome');
 const input     = document.getElementById('questionInput');
 const sendBtn   = document.getElementById('sendBtn');
-const form      = document.getElementById('inputForm');
 const historyList = document.getElementById('historyList');
+const historyTitle = document.getElementById('historyTitle');
+const authBtn   = document.getElementById('authBtn');
+const authArea  = document.getElementById('authArea');
 
 let currentProgressMsg = null;   // 当前进度消息 DOM（用于更新文本）
+let currentMode = 'login';       // 弹窗当前 tab
 
-// ===== 侧边栏（占位交互，B-3 接入 /chat/history）=====
+// ===== token 管理（存 localStorage：刷新页面不丢登录态）=====
+function getToken() { return localStorage.getItem('lcr_token') || ''; }
+function getUsername() { return localStorage.getItem('lcr_username') || ''; }
+
+// ===== 登录 / 注册 =====
+function openAuth() {
+  document.getElementById('authModal').classList.add('open');
+  document.getElementById('authErr').textContent = '';
+}
+
+function closeAuth() {
+  document.getElementById('authModal').classList.remove('open');
+}
+
+function switchTab(mode) {
+  currentMode = mode;
+  document.getElementById('tabLogin').classList.toggle('active', mode === 'login');
+  document.getElementById('tabRegister').classList.toggle('active', mode === 'register');
+  document.getElementById('modalTitle').textContent = mode === 'login' ? '登录' : '注册';
+  document.getElementById('authSubmitBtn').textContent = mode === 'login' ? '登录' : '注册';
+  document.getElementById('authErr').textContent = '';
+}
+
+async function submitAuth() {
+  const username = document.getElementById('authUser').value.trim();
+  const password = document.getElementById('authPass').value;
+  const errEl = document.getElementById('authErr');
+
+  if (!username || !password) { errEl.textContent = '请填写用户名和密码'; return; }
+
+  try {
+    const path = currentMode === 'login' ? '/auth/login' : '/auth/register';
+    const resp = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await resp.json().catch(() => ({}));
+
+    if (!resp.ok) {
+      errEl.textContent = data.detail || '请求失败';
+      return;
+    }
+
+    // 登录成功：存 token，关闭弹窗，刷新侧边栏历史
+    localStorage.setItem('lcr_token', data.token);
+    localStorage.setItem('lcr_username', data.username);
+    closeAuth();
+    renderAuthArea();
+    loadMyHistory();
+  } catch (e) {
+    errEl.textContent = '网络错误：' + e.message;
+  }
+}
+
+function logout() {
+  localStorage.removeItem('lcr_token');
+  localStorage.removeItem('lcr_username');
+  renderAuthArea();
+  renderHistoryEmpty();
+}
+
+function renderAuthArea() {
+  const username = getUsername();
+  if (username) {
+    authArea.innerHTML = `
+      <div class="auth-user">
+        <span>👤 ${escapeHTML(username)}</span>
+        <span class="logout-btn" onclick="logout()">登出</span>
+      </div>`;
+  } else {
+    authArea.innerHTML = `<button class="auth-btn" onclick="openAuth()">登录 / 注册</button>`;
+  }
+}
+
+// 页面加载时恢复登录态
+renderAuthArea();
+if (getToken()) loadMyHistory();
+
+// ===== 侧边栏历史 =====
+function renderHistoryEmpty() {
+  historyTitle.textContent = '历史会话';
+  historyList.innerHTML = `
+    <div class="history-empty">未登录状态，提问记录仅在当前页面保留。<br>登录后可长期保存并回看。</div>`;
+}
+
+async function loadMyHistory() {
+  const token = getToken();
+  if (!token) return;
+  try {
+    const resp = await fetch('/chat/history/mine', {
+      headers: { Authorization: 'Bearer ' + token },
+    });
+    if (!resp.ok) { renderHistoryEmpty(); return; }
+    const data = await resp.json();
+    historyTitle.textContent = `历史会话（${data.total}）`;
+    if (!data.history || data.history.length === 0) {
+      historyList.innerHTML = `<div class="history-empty">还没有历史提问，去问一条吧。</div>`;
+      return;
+    }
+    historyList.innerHTML = '';
+    for (const rec of data.history) {
+      const div = document.createElement('div');
+      div.className = 'history-item';
+      div.textContent = rec.question;
+      div.title = rec.question;
+      // 点击回看：把当时提问 + 回答 + 引用渲染回消息区
+      div.onclick = () => showStored(rec);
+      historyList.appendChild(div);
+    }
+  } catch (e) {
+    /* 网络异常：保留占位 */
+  }
+}
+
+/** 渲染一条已存的历史问答（登录用户回看） */
+function showStored(rec) {
+  if (welcome) welcome.style.display = 'none';
+  chatArea.querySelectorAll('.msg').forEach(m => m.remove());
+
+  addBubble('user', '您', rec.question);
+
+  const div = addBubble('assistant', '⚖️ 助手', rec.answer || '（无回答）');
+  if (rec.citations && rec.citations.length > 0) {
+    const details = document.createElement('details');
+    details.className = 'citations';
+    details.open = true;
+    const summary = document.createElement('summary');
+    summary.textContent = `📋 引用法律条文（${rec.citations.length} 条）`;
+    details.appendChild(summary);
+    const ul = document.createElement('ul');
+    for (const c of rec.citations) {
+      const li = document.createElement('li');
+      li.innerHTML = `<code>《${lawName(c.law_id)}》第${c.article_no}条</code>`;
+      if (c.chapter) li.innerHTML += ` <small>（${c.chapter}）</small>`;
+      ul.appendChild(li);
+    }
+    details.appendChild(ul);
+    div.querySelector('.bubble').appendChild(details);
+  }
+}
+
+// ===== 新对话 =====
 function newChat() {
-  // 清空消息区、恢复欢迎卡片，重置输入
   chatArea.querySelectorAll('.msg').forEach(m => m.remove());
   if (welcome) welcome.style.display = 'flex';
   chatArea.scrollTop = 0;
   setSending(false);
-  historyList.querySelectorAll('.history-item').forEach(el =>
-    el.classList.toggle('active', el.dataset.isNew === '1'));
-}
-
-function selectHistory(el) {
-  // 占位：只切换选中态；接入历史后改为加载该会话
-  historyList.querySelectorAll('.history-item').forEach(x => x.classList.remove('active'));
-  el.classList.add('active');
+  historyList.querySelectorAll('.history-item').forEach(el => el.classList.remove('active'));
 }
 
 // ===== 发送消息 =====
@@ -216,10 +414,8 @@ function send(e) {
 
   if (welcome) welcome.style.display = 'none';
 
-  // 添加用户气泡
   addBubble('user', '您', question);
 
-  // 占位进度消息：后续各阶段帧更新它的文本
   currentProgressMsg = addBubble('progress', '⚖️ 助手', '正在理解您的问题...');
   setSending(true);
 
@@ -232,9 +428,12 @@ function send(e) {
  */
 async function fetchSSE(question) {
   try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (getToken()) headers.Authorization = 'Bearer ' + getToken();
+
     const resp = await fetch('/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ question }),
     });
 
@@ -255,9 +454,8 @@ async function fetchSSE(question) {
 
       buffer += decoder.decode(value, { stream: true });
 
-      // 按空行分包：SSE 帧之间以 \n\n 分隔
       const parts = buffer.split('\n\n');
-      buffer = parts.pop() || '';  // 最后一段可能是不完整帧
+      buffer = parts.pop() || '';
 
       for (const part of parts) {
         const line = part.trim();
@@ -268,6 +466,9 @@ async function fetchSSE(question) {
         } catch (e) { /* 非 JSON 帧忽略 */ }
       }
     }
+
+    // 登录用户：回答完成后刷新侧边栏历史列表
+    if (getToken()) loadMyHistory();
   } catch (e) {
     updateProgress('❌ 网络错误: ' + e.message);
     setSending(false);
@@ -322,13 +523,11 @@ function finishDone(frame) {
     return;
   }
 
-  // 拒答
   if (payload.refuse) {
     addBubble('assistant', '⚖️ 助手', payload.answer || '抱歉，无法就该问题给出明确结论。');
     return;
   }
 
-  // 正常回答 + 引用
   const div = addBubble('assistant', '⚖️ 助手', payload.answer || '（空回答）');
 
   if (payload.citations && payload.citations.length > 0) {
@@ -342,7 +541,7 @@ function finishDone(frame) {
     const ul = document.createElement('ul');
     for (const c of payload.citations) {
       const li = document.createElement('li');
-      li.innerHTML = `<code>《${c.law_id}》第${c.article_no}条</code>`;
+      li.innerHTML = `<code>《${lawName(c.law_id)}》第${c.article_no}条</code>`;
       if (c.chapter) li.innerHTML += ` <small>（${c.chapter}）</small>`;
       ul.appendChild(li);
     }
@@ -383,6 +582,16 @@ function setSending(disabled) {
   sendBtn.disabled = disabled;
   sendBtn.textContent = disabled ? '发送中...' : '发送';
   if (!disabled) { input.value = ''; input.focus(); }
+}
+
+/** law_id（英文 slug）→ 中文法律名，用于展示 */
+const LAW_NAME = {
+  labor_law: '劳动法',
+  labor_contract_law: '劳动合同法',
+};
+
+function lawName(lawId) {
+  return LAW_NAME[lawId] || lawId;
 }
 
 /** 基础 HTML 转义 */

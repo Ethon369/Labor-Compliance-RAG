@@ -26,6 +26,7 @@ from app.api.models import (
     SseChunk,
     ErrorResponse,
 )
+from app.api.auth import _bearer_user_id, load_user_history, save_chat_history
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -41,7 +42,7 @@ def _sse_frame(data: dict) -> str:
     return f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
 
 
-async def _stream_chat(app, question: str) -> AsyncIterator[str]:
+async def _stream_chat(app, question: str, user_id: int | None = None, settings=None) -> AsyncIterator[str]:
     """SSE 流式生成器：逐阶段推送进度事件，最后推送 done 帧。
 
     为什么不用 async for 在节点间插桩：当前 Graph compile 后 invoke 是同步的，
@@ -81,6 +82,20 @@ async def _stream_chat(app, question: str) -> AsyncIterator[str]:
         )
         yield _sse_frame(SseChunk(stage="done", content=json.dumps(done.model_dump(), ensure_ascii=False)))
 
+        # 登录用户：这条问答落库，供 /chat/history/mine 回看。
+        # 落库失败静默忽略——数据库抖动不该阻断回答本身。
+        if user_id and settings:
+            try:
+                save_chat_history(
+                    settings.database_url,
+                    user_id,
+                    question,
+                    answer.answer,
+                    [c.model_dump() for c in answer.citations],
+                )
+            except Exception:
+                pass
+
     except Exception as exc:
         yield _sse_frame(SseChunk(
             stage="error",
@@ -104,12 +119,16 @@ async def chat(req: ChatRequest, request: Request):
     客户端解析：每行 data: <json> 对应一个 SseChunk；
     当 stage=="done" 时 content 字段是 ChatDonePayload 的 JSON 字符串。
     """
+    settings = request.app.state.settings
     app = request.app.state.agent
     if app is None:
         raise HTTPException(status_code=503, detail="Agent 未就绪，请检查配置")
-    stream = _stream_chat(app, req.question)
 
-    # 保存历史
+    # 登录用户带有效 token → 取 user_id，问答落库；游客为 None，历史只进内存
+    user_id = _bearer_user_id(request, settings.auth_secret)
+    stream = _stream_chat(app, req.question, user_id=user_id, settings=settings)
+
+    # 游客历史：保存在内存（服务重启即清；见决策 07 取舍）
     history: list = request.app.state.history
     history.append({"question": req.question, "timestamp": None})
     if len(history) > _MAX_HISTORY:
@@ -139,3 +158,18 @@ async def chat_history(request: Request, limit: int = 50):
     if limit > _MAX_HISTORY:
         limit = _MAX_HISTORY
     return {"history": list(reversed(history[-limit:])), "total": len(history)}
+
+
+@router.get("/history/mine")
+async def chat_history_mine(request: Request, limit: int = 50):
+    """GET /chat/history/mine：登录用户自己的问答历史（DB 持久化，重启不丢）。"""
+    settings = request.app.state.settings
+    uid = _bearer_user_id(request, settings.auth_secret)
+    if uid is None:
+        raise HTTPException(status_code=401, detail="未登录或登录已过期")
+    if limit < 1:
+        limit = 50
+    if limit > _MAX_HISTORY:
+        limit = _MAX_HISTORY
+    records, total = load_user_history(settings.database_url, uid, limit)
+    return {"history": records, "total": total}

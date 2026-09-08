@@ -43,3 +43,6 @@ class Settings(BaseSettings):
     llm_model: str = "deepseek-chat"
     # 改写/回答追求可复现确定，温度放低；事实引用场景幻觉代价高
     llm_temperature: float = 0.0
+
+    # 认证签名密钥：注册/登录 token 的 HMAC 密钥（生产环境必须从 .env 覆盖）
+    auth_secret: str = "dev-secret-change-me"

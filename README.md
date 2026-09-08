@@ -57,7 +57,7 @@
 
 ---
 
-## 项目阶段（7 步交付，141 测试全绿）
+## 项目阶段（10 步交付，154 测试全绿）
 
 | 阶段 | 内容 | 测试数 | 状态 |
 |---|---|---|---|
@@ -68,8 +68,11 @@
 | 5 | 经济补偿金计算器 + ToolRegistry + ToolCallingAnswerer（function calling）| 28 | ✅ |
 | 6 | FastAPI + SSE 流式 /chat + /chat/history + 统一异常处理 | 18 | ✅ |
 | 7 | Dockerfile + docker-compose 双容器部署 + README 架构文档 | — | ✅ |
+| 8 | 静态聊天前端 + LLM 真接入 + 拒答边界重构 | 143 | ✅ |
+| 9 | 前端 B-2 美化：浅灰侧边栏 + 白色消息区 + 引用中文名 | — | ✅ |
+| 10 | 认证与会话历史：登录/注册 + 持久化问答记录 | 11 | ✅ |
 
-**全量测试：`pytest tests/ -v` → 141 passed**
+**全量测试：`pytest tests/ -v` → 154 passed**
 
 ---
 
@@ -170,9 +173,10 @@ curl http://localhost:8000/docs
 ```
 app/                    # FastAPI 应用
   main.py               # 入口：lifespan 装配 + CORS + 异常 handler + 静态前端挂载
-  api/                  # 路由层（阶段 6）
-    routes.py           # POST /chat (SSE) + GET /chat/history
-    models.py           # ChatRequest / SseChunk / ErrorResponse
+  api/                  # 路由层（阶段 6、10）
+    auth.py             # 注册/登录/签名 token + 密码哈希（PBKDF2 + HMAC）
+    routes.py           # POST /chat (SSE) + GET /chat/history + GET /chat/history/mine
+    models.py           # ChatRequest / AuthRequest / SseChunk / ErrorResponse
   static/               # 聊天前端（阶段 8，纯静态 HTML+CSS+JS，零新依赖）
     index.html          # 浏览器聊天页：SSE 流式 + 进度帧 + 引用列表
   agent/                # LangGraph 流程编排（阶段 4）
@@ -241,7 +245,7 @@ docker-compose.yml      # app + postgres 双容器编排
 
 ---
 
-## 技术决策清单（7 篇，面试前必读）
+## 技术决策清单（10 篇，面试前必读）
 
 | # | 标题 | 核心决策 |
 |---|---|---|
@@ -254,6 +258,7 @@ docker-compose.yml      # app + postgres 双容器编排
 | 07 | [流式API](docs/decisions/07-api.md) | SSE 不用 WebSocket + 流内异常用 error 帧 |
 | 08 | [Docker部署](docs/decisions/08-docker部署.md) | single-stage 构建 + compose 双容器 + 环境变量注入 |
 | 09 | [拒答边界与LLM接入](docs/decisions/09-拒答边界与LLM接入.md) | verify_mode 命中即答 + LLM 自己判断拒答，替换规则 top-1 阈值拦截 |
+| 10 | [认证与会话历史](docs/decisions/10-认证与会话历史.md) | 自制 HMAC token + PBKDF2 哈希 + PostgreSQL 持久化；游客可问，登录后看自己的历史 |
 
 ---
 

@@ -48,3 +48,15 @@ class ErrorResponse(BaseModel):
     """统一错误响应。"""
     error: str
     detail: str = ""
+
+
+class AuthRequest(BaseModel):
+    """注册/登录请求：用户名 + 密码。"""
+    username: str = Field(..., min_length=2, max_length=32, description="用户名")
+    password: str = Field(..., min_length=4, max_length=64, description="密码")
+
+
+class AuthResponse(BaseModel):
+    """认证成功响应：token 由前端存 localStorage，请求时放 Authorization 头。"""
+    token: str
+    username: str
