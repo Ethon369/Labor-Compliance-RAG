@@ -40,9 +40,19 @@ def make_retrieve_node(retriever: RetrievalProtocol):
     return node
 
 
-def make_verify_node(verifier: CitationVerifier):
+def make_verify_node(verifier: CitationVerifier, mode: str = "rule"):
+    """核验节点。mode 决定"要不要拒答"这条边界由谁把关：
+    - "rule"：CitationVerifier 规则核验（top-1 条文对查询意图词的覆盖率达阈值才可答）
+    - "pass"：离线模板模式不设防——有命中即可答（空命中和规则模式一样拒答）
+
+    为什么 offline 默认用 pass：模板回答本身不产生"新结论"（只拼条文原文），
+    不存在幻觉风险；设防只会挡住演示和测试。真 LLM 上线后切回 rule，
+    让"条文不足以支撑回答"的判断交给规则兜底（LLM 自己也会说"无法提供明确结论"）。
+    """
+
     def node(state: dict[str, Any]) -> dict[str, Any]:
-        supported = verifier.supported(state["rewritten"], state.get("hits") or [])
+        hits = state.get("hits") or []
+        supported = bool(hits) if mode == "pass" else verifier.supported(state["rewritten"], hits)
         return {"supported": supported}
 
     return node

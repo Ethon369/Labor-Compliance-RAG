@@ -13,8 +13,9 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        客户端（浏览器 / curl）                     │
-│                    POST /chat (SSE 流式)  GET /chat/history      │
+│       客户端（浏览器聊天页 / curl）                                │
+│   GET / → app/static/index.html（静态页，POST /chat SSE 流式）   │
+│   /chat/history（会话历史）  /docs（Swagger）                     │
 └───────────────────────────┬─────────────────────────────────────┘
                             │  text/event-stream
                             ▼
@@ -130,7 +131,8 @@ curl -X POST http://localhost:8000/chat \
   -d '{"question":"公司延长我工作时间，加班费怎么算"}' \
   --no-buffer
 
-# 打开浏览器：http://localhost:8000/docs → Swagger 交互式文档
+# 打开浏览器：http://localhost:8000 → 聊天界面（SSE 流式问答）
+#            http://localhost:8000/docs → Swagger 交互式文档
 
 # 6) 停止（数据不丢）
 docker compose down
@@ -167,10 +169,12 @@ curl http://localhost:8000/docs
 
 ```
 app/                    # FastAPI 应用
-  main.py               # 入口：lifespan 装配 + CORS + 异常 handler
+  main.py               # 入口：lifespan 装配 + CORS + 异常 handler + 静态前端挂载
   api/                  # 路由层（阶段 6）
     routes.py           # POST /chat (SSE) + GET /chat/history
     models.py           # ChatRequest / SseChunk / ErrorResponse
+  static/               # 聊天前端（阶段 8，纯静态 HTML+CSS+JS，零新依赖）
+    index.html          # 浏览器聊天页：SSE 流式 + 进度帧 + 引用列表
   agent/                # LangGraph 流程编排（阶段 4）
     graph.py            # build_agent / build_agent_from_config
     nodes.py            # 5 节点 + 条件边路由
@@ -249,6 +253,7 @@ docker-compose.yml      # app + postgres 双容器编排
 | 06 | [Function Calling](docs/decisions/06-tools.md) | 手写 JSON Schema + ToolCallingAnswerer 内循环 |
 | 07 | [流式API](docs/decisions/07-api.md) | SSE 不用 WebSocket + 流内异常用 error 帧 |
 | 08 | [Docker部署](docs/decisions/08-docker部署.md) | single-stage 构建 + compose 双容器 + 环境变量注入 |
+| 09 | [拒答边界与LLM接入](docs/decisions/09-拒答边界与LLM接入.md) | verify_mode 命中即答 + LLM 自己判断拒答，替换规则 top-1 阈值拦截 |
 
 ---
 

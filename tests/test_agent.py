@@ -50,8 +50,13 @@ class FakeRetriever:
         return RetrievalResult(query=query, hits=self.hits)
 
 
-def _invoke(hits: list[FusedHit], query: str = "公司延长我工作时间，加班费怎么算") -> AgentAnswer:
-    app = build_agent(FakeRetriever(hits))
+def _invoke(
+    hits: list[FusedHit],
+    query: str = "公司延长我工作时间，加班费怎么算",
+    verify_mode: str = "rule",
+) -> AgentAnswer:
+    # 默认 rule 模式：保住"top-1 无关 → 拒答"的既有语义（对应真 LLM 配套的兜底）
+    app = build_agent(FakeRetriever(hits), verify_mode=verify_mode)
     result = app.invoke({"original": query})
     return result["answer"]
 
@@ -89,6 +94,23 @@ def test_refuse_on_empty_hits():
 
 def test_refuse_when_top_hit_irrelevant():
     answer = _invoke([UNRELATED])  # 条文只有"工时制度"，覆盖不了"加班费"意图
+    assert answer.refuse is True
+    assert answer.citations == []
+
+
+# 离线模板模式（verify_mode="pass"）：命中即答，不设规则防线。
+# 模板只拼条文原文、不产生新结论，无幻觉风险；rule 模式的拒答是给真 LLM 配套的兜底。
+
+
+def test_pass_mode_answers_when_hits_exist():
+    answer = _invoke([UNRELATED], verify_mode="pass")  # top-1 无关也照答
+    assert answer.refuse is False
+    assert len(answer.citations) == 1
+    assert "第36条" in answer.answer  # 模板引用了条文原文
+
+
+def test_pass_mode_still_refuses_on_empty():
+    answer = _invoke([], verify_mode="pass")  # 无命中仍拒答
     assert answer.refuse is True
     assert answer.citations == []
 

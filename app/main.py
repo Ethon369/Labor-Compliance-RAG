@@ -7,11 +7,13 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.models import ErrorResponse
 from app.api.routes import router as chat_router
@@ -50,6 +52,11 @@ app.add_middleware(
 )
 
 app.include_router(chat_router)
+
+# 挂载静态前端：放在路由之后，避免抢占 /docs、/chat 等路径。
+# index.html 由 StaticFiles(html=True) 作为默认首页提供。
+static_dir = Path(__file__).resolve().parent / "static"
+app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
 
 
 # ---- 统一异常处理 ----

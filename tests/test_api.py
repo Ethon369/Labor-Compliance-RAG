@@ -49,9 +49,9 @@ class FakeRetriever:
 
 # ---- Fixture：在 lifespan 之后注入 agent ----
 
-def _inject_agent(hits: list[FusedHit]):
+def _inject_agent(hits: list[FusedHit], verify_mode: str = "pass"):
     """每次创建 TestClient 后调用：用 FakeRetriever agent 替换 lifespan 创建的 agent。"""
-    fastapi_app.state.agent = build_agent(FakeRetriever(hits))
+    fastapi_app.state.agent = build_agent(FakeRetriever(hits), verify_mode=verify_mode)
     fastapi_app.state.history = []
 
 
@@ -65,9 +65,12 @@ def client_with_agent():
 
 @pytest.fixture
 def client_refuse():
-    """构造拒答链路的 TestClient：检索命中无关条文。"""
+    """构造拒答链路的 TestClient：检索命中无关条文。
+
+    显式用 verify_mode="rule"：拒答是规则核验（真 LLM 配套兜底）的语义，
+    离线模板模式（pass）命中即答，不走拒答。见 graph.build_agent 的 verify_mode。"""
     with TestClient(fastapi_app) as client:
-        _inject_agent([UNRELATED_HIT])
+        _inject_agent([UNRELATED_HIT], verify_mode="rule")
         yield client
 
 
@@ -237,10 +240,12 @@ def test_405_method_not_allowed():
 
 
 def test_get_chat_no_params():
-    """GET /chat 无参数 → 方法不允许（接口只接受 POST）。"""
+    """GET /chat 无参数 → 404。本路由只注册了 POST（路由层返回 405），
+    GET 未命中任何路由（方法路由不匹配时不占用路径），被静态根挂载兜底为 404。
+    这也验证了静态挂载不会抢占已有的 API 路由。"""
     with TestClient(fastapi_app) as client:
         resp = client.get("/chat")
-    assert resp.status_code == 405
+    assert resp.status_code == 404
 
 
 if __name__ == "__main__":

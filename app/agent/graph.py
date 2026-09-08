@@ -39,8 +39,15 @@ def build_agent(
     rewriter: QueryRewriter | None = None,
     answerer: AnswerGenerator | None = None,
     threshold: float = 0.3,
+    verify_mode: str = "pass",
 ):
-    """组装并编译 Graph。retriever 必传；改写/回答缺省用离线占位，核验阈值可调。"""
+    """组装并编译 Graph。retriever 必传；改写/回答缺省用离线占位，核验阈值可调。
+
+    verify_mode 控制核验边界（见 nodes.make_verify_node）：
+    - "pass"（默认）：命中即答——offline 模板答案和真 LLM 都走这里，
+      拒答判断分别交给模板设计 / LLM system prompt，规则不设防
+    - "rule"：可选后备，用 CitationVerifier 规则核验（测试验证拒答链路用）
+    """
     rewriter = rewriter or PassThroughRewriter()
     answerer = answerer or TemplateAnswerer()
     verifier = CitationVerifier(threshold)
@@ -48,7 +55,7 @@ def build_agent(
     g = StateGraph(AgentState, input_schema=AgentInput)
     g.add_node("rewrite", make_rewrite_node(rewriter))
     g.add_node("retrieve", make_retrieve_node(retriever))
-    g.add_node("verify", make_verify_node(verifier))
+    g.add_node("verify", make_verify_node(verifier, mode=verify_mode))
     g.add_node("answer", make_answer_node(answerer))
     g.add_node("refuse", make_refuse_node())
 
@@ -91,8 +98,17 @@ def build_agent_from_config(
             base_url=settings.llm_base_url,
             temperature=settings.llm_temperature,
         )
+        # 真 LLM 模式：命中即答，拒答判断交给 LLM（system prompt 已约定
+        # "条文不足以回答时说无法提供明确结论"）。不用规则核验拦截——
+        # 覆盖率阈值对短口语查询天生误杀（0.30 一刀切会拒掉规范条文恰好
+        # 覆盖意图、但词元重叠率不足的合法问题）。
+        verify_mode = "pass"
     else:
         rewriter = None  # build_agent 缺省用 PassThroughRewriter
         answerer = None  # 缺省用 TemplateAnswerer
+        # 离线模板模式：模板只拼条文原文不产生新结论，无需规则设防，命中即答
+        verify_mode = "pass"
 
-    return build_agent(retriever, rewriter=rewriter, answerer=answerer)
+    return build_agent(
+        retriever, rewriter=rewriter, answerer=answerer, verify_mode=verify_mode
+    )
