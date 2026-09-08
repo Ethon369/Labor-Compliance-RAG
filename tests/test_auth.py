@@ -119,28 +119,89 @@ def test_register_and_login():
 
 
 @pytest.mark.db
-def test_login_chat_saves_db_history():
+def test_login_chat_saves_session():
+    """登录提问 → 自动建会话；会话列表出现；消息回读含问答 + session_id 透传。"""
     with TestClient(fastapi_app) as client:
         _inject_offline_agent()
         token, _ = _new_user(client)
         h = {"Authorization": "Bearer " + token}
 
-        # 未登录访问自己的历史 → 401
-        assert client.get("/chat/history/mine").status_code == 401
-
-        # 登录后问一条 → SSE 正常，落库
+        # 登录后问一条 → SSE 正常
         r = client.post("/chat", json={"question": "试用期最长可以约定多久"}, headers=h)
         assert r.status_code == 200
         assert "text/event-stream" in r.headers.get("content-type", "")
+        # done 帧应带新建的 session_id
+        sid = None
+        for line in r.text.split("\n"):
+            if '"done"' in line:
+                import json as _j
+                payload = _j.loads(line[len("data: "):])
+                sid = _j.loads(payload["content"])["session_id"]
+        assert sid is not None
 
-        # 回看历史：有刚才那条，且带回答
-        r = client.get("/chat/history/mine", headers=h)
+        # 会话列表里有这条
+        r = client.get("/chat/sessions", headers=h)
         assert r.status_code == 200
-        data = r.json()
-        assert data["total"] >= 1
-        rec = data["history"][0]
-        assert rec["question"] == "试用期最长可以约定多久"
-        assert len(rec["answer"]) > 0
+        sessions = r.json()["sessions"]
+        assert len(sessions) >= 1
+
+        # 该会话消息含 user 问题 + assistant 回答
+        r = client.get(f"/chat/sessions/{sid}/messages", headers=h)
+        assert r.status_code == 200
+        msgs = r.json()["messages"]
+        roles = [m["role"] for m in msgs]
+        assert roles == ["user", "assistant"]
+        assert msgs[0]["content"] == "试用期最长可以约定多久"
+        assert len(msgs[1]["content"]) > 0
+
+        # 续问同一会话 → 追加消息（多轮）
+        r = client.post("/chat", json={"question": "超过六个月怎么办", "session_id": sid}, headers=h)
+        assert r.status_code == 200
+        r = client.get(f"/chat/sessions/{sid}/messages", headers=h)
+        msgs = r.json()["messages"]
+        assert len(msgs) == 4  # 已累计两轮问答
+
+
+@pytest.mark.db
+def test_login_session_isolation():
+    """会话归属隔离：他人无权读别人的会话消息。"""
+    with TestClient(fastapi_app) as client:
+        _inject_offline_agent()
+        token_a, _ = _new_user(client)
+        token_b, _ = _new_user(client)
+
+        ha = {"Authorization": "Bearer " + token_a}
+        r = client.post("/chat", json={"question": "试用期最长可以约定多久"}, headers=ha)
+        # 从 done 帧取 session_id
+        sid = None
+        for line in r.text.split("\n"):
+            if '"done"' in line:
+                import json as _j
+                payload = _j.loads(line[len("data: "):])
+                sid = _j.loads(payload["content"])["session_id"]
+
+        # 用户 B 访问 A 的会话 → 404
+        hb = {"Authorization": "Bearer " + token_b}
+        r = client.get(f"/chat/sessions/{sid}/messages", headers=hb)
+        assert r.status_code == 404
+
+
+@pytest.mark.db
+def test_anonymous_chat_not_in_db():
+    """游客可问，但其问答不进任何登录用户的会话。"""
+    with TestClient(fastapi_app) as client:
+        _inject_offline_agent()
+        token, _ = _new_user(client)
+        h = {"Authorization": "Bearer " + token}
+
+        # 匿名问一条（不带 header），/chat 本身可用
+        r = client.post("/chat", json={"question": "公司拖欠我工资怎么办"})
+        assert r.status_code == 200
+
+        # 登录用户会话里不应出现匿名那条
+        r = client.get("/chat/sessions", headers=h)
+        assert r.status_code == 200
+        assert r.json()["sessions"] == []
 
 
 @pytest.mark.db

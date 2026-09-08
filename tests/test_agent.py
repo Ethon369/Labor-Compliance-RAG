@@ -219,11 +219,11 @@ class FakeAnswerer:
     """测试用回答器：记录调用并返回固定值。"""
 
     def __init__(self, return_value: str = "带引用的回答"):
-        self.called_with: list[tuple[str, list[FusedHit]]] = []
+        self.called_with: list[tuple[str, list[FusedHit], list[dict]]] = []
         self.return_value = return_value
 
-    def generate(self, query: str, hits: list[FusedHit]) -> str:
-        self.called_with.append((query, hits))
+    def generate(self, query: str, hits: list[FusedHit], history: list[dict] | None = None) -> str:
+        self.called_with.append((query, hits, history or []))
         return self.return_value
 
 

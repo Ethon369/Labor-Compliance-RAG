@@ -6,12 +6,26 @@ API 层只暴露给客户端需要的字段——不要把内部 Citation 对象
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
+class HistoryMsg(BaseModel):
+    """多轮上下文里的一轮消息（登录用户会话由后端读取，游客由前端上传）。"""
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class ChatRequest(BaseModel):
-    """POST /chat 请求体：一条劳动争议问题。"""
+    """POST /chat 请求体：一条劳动争议问题。
+
+    session_id：登录用户目标会话（不传则自动新建会话）。游客置空。
+    history：可选的多轮上下文，游客前端上传用；登录用户传了也以服务端会话为准。
+    """
     question: str = Field(..., min_length=1, max_length=2000, description="劳动争议问题")
+    session_id: int | None = Field(default=None, description="登录用户目标会话 id；空则新建")
+    history: list[HistoryMsg] = Field(default_factory=list, description="游客端多轮上下文")
 
 
 class SseChunk(BaseModel):
@@ -38,10 +52,11 @@ class CitationBrief(BaseModel):
 
 
 class ChatDonePayload(BaseModel):
-    """SSE done 帧的完整载荷：答案 + 拒答标记 + 引用列表。"""
+    """SSE done 帧的完整载荷：答案 + 拒答标记 + 引用列表 + 会话定位。"""
     refuse: bool = False
     answer: str
     citations: list[CitationBrief] = []
+    session_id: int | None = None
 
 
 class ErrorResponse(BaseModel):

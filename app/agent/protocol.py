@@ -33,8 +33,11 @@ class QueryRewriter(Protocol):
 
 
 class AnswerGenerator(Protocol):
-    """回答生成能力：依据命中的条文生成带引用的答案。真产品里是 LLM。"""
-    def generate(self, query: str, hits: list[FusedHit]) -> str: ...
+    """回答生成能力：依据命中的条文生成带引用的答案。真产品里是 LLM。
+
+    history：可选的多轮对话上下文（[{role, content}, ...]，role ∈ user/assistant），
+    供回答器参考前文组织"承接式"回答；离线实现可忽略。"""
+    def generate(self, query: str, hits: list[FusedHit], history: list[dict] | None = None) -> str: ...
 
 
 # ---- 离线默认实现（零 key 可跑） ----
@@ -51,8 +54,8 @@ class TemplateAnswerer:
     """离线默认回答：确定性模板拼条文，不产生引用断言之外的结论（无幻觉）。
 
     真接 LLM 后这里换成开放式回答；模板句刻意"机械"，只服务两件事——让端到端测试
-    能断言"答案引用了 top 条文"，以及演示时结果可预测。"""
-    def generate(self, query: str, hits: list[FusedHit]) -> str:
+    能断言"答案引用了 top 条文"，以及演示时结果可预测。history 对模板无意义，忽略。"""
+    def generate(self, query: str, hits: list[FusedHit], history: list[dict] | None = None) -> str:
         if not hits:
             return "未检索到可引用的法律条文。"
         lines = [f"《{h.law_id}》第{h.article_no}条：{h.text}" for h in hits]
@@ -162,15 +165,18 @@ class LLMAnswerer:
         self._endpoint = f"{base_url.rstrip('/')}/chat/completions"
         self._temperature = temperature
 
-    def generate(self, query: str, hits: list[FusedHit]) -> str:
+    def generate(self, query: str, hits: list[FusedHit], history: list[dict] | None = None) -> str:
         article_lines: list[str] = []
         for h in hits:
             article_lines.append(f"《{h.law_id}》第{h.article_no}条：{h.text}")
         articles = "\n".join(article_lines) if article_lines else "（未检索到相关条文）"
-        messages: list[dict[str, str]] = [
-            {"role": "system", "content": _ANSWER_SYSTEM_HEAD},
-            {"role": "user", "content": _ANSWER_USER_TPL.format(query=query, articles=articles)},
-        ]
+        messages: list[dict[str, str]] = [{"role": "system", "content": _ANSWER_SYSTEM_HEAD}]
+        # 多轮上下文：把之前几轮问答作为 user/assistant 消息拼进 prompt，
+        # 让 LLM 能回答"承接上文"的追问（如"那第二条呢"）
+        for h in (history or [])[-6:]:
+            if h.get("role") in ("user", "assistant") and h.get("content"):
+                messages.append({"role": h["role"], "content": h["content"]})
+        messages.append({"role": "user", "content": _ANSWER_USER_TPL.format(query=query, articles=articles)})
         return _call_chat(
             self._endpoint, self._api_key, self._model,
             messages, self._temperature,
@@ -300,15 +306,17 @@ class ToolCallingAnswerer:
         self._temperature = temperature
         self._max_rounds = max_rounds
 
-    def generate(self, query: str, hits: list[FusedHit]) -> str:
+    def generate(self, query: str, hits: list[FusedHit], history: list[dict] | None = None) -> str:
         article_lines: list[str] = []
         for h in hits:
             article_lines.append(f"《{h.law_id}》第{h.article_no}条：{h.text}")
         articles = "\n".join(article_lines) if article_lines else "（未检索到相关条文）"
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _TOOL_ANSWER_SYSTEM},
-            {"role": "user", "content": _ANSWER_USER_TPL.format(query=query, articles=articles)},
-        ]
+        messages: list[dict[str, Any]] = [{"role": "system", "content": _TOOL_ANSWER_SYSTEM}]
+        # 同 LLMAnswerer：前几轮问答拼进上下文，支持承接式追问
+        for h in (history or [])[-6:]:
+            if h.get("role") in ("user", "assistant") and h.get("content"):
+                messages.append({"role": h["role"], "content": h["content"]})
+        messages.append({"role": "user", "content": _ANSWER_USER_TPL.format(query=query, articles=articles)})
         return _call_chat_with_tools(
             self._endpoint, self._api_key, self._model,
             messages, self._tools_registry.tool_schemas(),

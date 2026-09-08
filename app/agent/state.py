@@ -16,8 +16,12 @@ from app.rag.models import FusedHit
 
 class AgentInput(BaseModel):
     """Graph 入口校验模型。字段名取 original（与状态同名，LangGraph 据此投影进状态），
-    API 层若想对外暴露 query 这个名字，可在路由层映射——Graph 内部保持一致。"""
+    API 层若想对外暴露 query 这个名字，可在路由层映射——Graph 内部保持一致。
+
+    history：可选多轮上下文（[{role, content}, ...]），由 API 层从会话读取后注入，
+    只被 answer 节点消费；rewrite/retrieve 仍只看当前问题（见决策 10 取舍）。"""
     original: str
+    history: list[dict] = Field(default_factory=list)
 
 
 class Citation(BaseModel):
@@ -45,6 +49,7 @@ class AgentState(TypedDict, total=False):
     total=False 让中间字段（rewritten/hits/supported）在到达对应节点前可以不存在。
     """
     original: str
+    history: list[dict]
     rewritten: str
     hits: list[FusedHit]
     supported: bool

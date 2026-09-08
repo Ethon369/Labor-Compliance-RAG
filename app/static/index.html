@@ -252,6 +252,10 @@ const authArea  = document.getElementById('authArea');
 
 let currentProgressMsg = null;   // 当前进度消息 DOM（用于更新文本）
 let currentMode = 'login';       // 弹窗当前 tab
+let currentSessionId = null;     // 登录用户当前会话 id；null = 尚未建会话（提问时自动建）
+let guestHistory = [];           // 游客本页多轮上下文 [{role, content}]（关页即没）
+let currentUsername = null;      // 当前登录用户名（用于气泡标签）
+let lastQuestion = '';           // 最近一次提问（finishDone 记录游客上下文用）
 
 // ===== token 管理（存 localStorage：刷新页面不丢登录态）=====
 function getToken() { return localStorage.getItem('lcr_token') || ''; }
@@ -297,12 +301,15 @@ async function submitAuth() {
       return;
     }
 
-    // 登录成功：存 token，关闭弹窗，刷新侧边栏历史
+    // 登录成功：存 token，关闭弹窗，进入新对话、刷新侧边栏会话列表
     localStorage.setItem('lcr_token', data.token);
     localStorage.setItem('lcr_username', data.username);
+    currentUsername = data.username;
+    currentSessionId = null;
     closeAuth();
     renderAuthArea();
-    loadMyHistory();
+    newChat();
+    loadSessions();
   } catch (e) {
     errEl.textContent = '网络错误：' + e.message;
   }
@@ -311,7 +318,11 @@ async function submitAuth() {
 function logout() {
   localStorage.removeItem('lcr_token');
   localStorage.removeItem('lcr_username');
+  currentUsername = null;
+  currentSessionId = null;
+  guestHistory = [];
   renderAuthArea();
+  newChat();
   renderHistoryEmpty();
 }
 
@@ -329,78 +340,106 @@ function renderAuthArea() {
 }
 
 // 页面加载时恢复登录态
+currentUsername = getUsername();
 renderAuthArea();
-if (getToken()) loadMyHistory();
+if (getToken()) loadSessions();
 
-// ===== 侧边栏历史 =====
+// ===== 侧边栏：登录用户 = 会话列表；游客 = 提示 =====
 function renderHistoryEmpty() {
   historyTitle.textContent = '历史会话';
   historyList.innerHTML = `
     <div class="history-empty">未登录状态，提问记录仅在当前页面保留。<br>登录后可长期保存并回看。</div>`;
 }
 
-async function loadMyHistory() {
-  const token = getToken();
-  if (!token) return;
+async function loadSessions() {
+  if (!getToken()) { renderHistoryEmpty(); return; }
   try {
-    const resp = await fetch('/chat/history/mine', {
-      headers: { Authorization: 'Bearer ' + token },
+    const resp = await fetch('/chat/sessions', {
+      headers: { Authorization: 'Bearer ' + getToken() },
     });
     if (!resp.ok) { renderHistoryEmpty(); return; }
     const data = await resp.json();
-    historyTitle.textContent = `历史会话（${data.total}）`;
-    if (!data.history || data.history.length === 0) {
+    const sessions = data.sessions || [];
+    historyTitle.textContent = `历史会话（${sessions.length}）`;
+    if (sessions.length === 0) {
       historyList.innerHTML = `<div class="history-empty">还没有历史提问，去问一条吧。</div>`;
       return;
     }
     historyList.innerHTML = '';
-    for (const rec of data.history) {
+    for (const s of sessions) {
       const div = document.createElement('div');
       div.className = 'history-item';
-      div.textContent = rec.question;
-      div.title = rec.question;
-      // 点击回看：把当时提问 + 回答 + 引用渲染回消息区
-      div.onclick = () => showStored(rec);
+      if (s.id === currentSessionId) div.classList.add('active');
+      div.textContent = s.title || '新对话';
+      div.title = s.title;
+      div.onclick = () => openSession(s.id);
       historyList.appendChild(div);
     }
-  } catch (e) {
-    /* 网络异常：保留占位 */
-  }
+  } catch (e) { /* 网络异常 */ }
 }
 
-/** 渲染一条已存的历史问答（登录用户回看） */
-function showStored(rec) {
+/** 点开某会话：拉取全部多轮消息并渲染到消息区 */
+async function openSession(sessionId) {
+  if (!getToken()) return;
+  try {
+    const resp = await fetch(`/chat/sessions/${sessionId}/messages`, {
+      headers: { Authorization: 'Bearer ' + getToken() },
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    currentSessionId = sessionId;
+    renderMsgs(data.messages || []);
+    loadSessions();
+  } catch (e) { /* 网络异常 */ }
+}
+
+/** 把一组消息渲染进消息区（多轮历史回显 / 直接展示均可复用） */
+function renderMsgs(msgs) {
   if (welcome) welcome.style.display = 'none';
   chatArea.querySelectorAll('.msg').forEach(m => m.remove());
-
-  addBubble('user', '您', rec.question);
-
-  const div = addBubble('assistant', '⚖️ 助手', rec.answer || '（无回答）');
-  if (rec.citations && rec.citations.length > 0) {
-    const details = document.createElement('details');
-    details.className = 'citations';
-    details.open = true;
-    const summary = document.createElement('summary');
-    summary.textContent = `📋 引用法律条文（${rec.citations.length} 条）`;
-    details.appendChild(summary);
-    const ul = document.createElement('ul');
-    for (const c of rec.citations) {
-      const li = document.createElement('li');
-      li.innerHTML = `<code>《${lawName(c.law_id)}》第${c.article_no}条</code>`;
-      if (c.chapter) li.innerHTML += ` <small>（${c.chapter}）</small>`;
-      ul.appendChild(li);
-    }
-    details.appendChild(ul);
-    div.querySelector('.bubble').appendChild(details);
+  if (!msgs.length) {
+    if (welcome) welcome.style.display = 'flex';
+    return;
   }
+  for (const m of msgs) {
+    if (m.role === 'user') {
+      addBubble('user', currentUsername ? currentUsername : '您', m.content);
+    } else {
+      const div = addBubble('assistant', '⚖️ 助手', m.content || '（无回答）');
+      attachCitations(div, m.citations || []);
+    }
+  }
+  chatArea.scrollTop = chatArea.scrollHeight;
 }
 
-// ===== 新对话 =====
+/** 给助手气泡挂引用列表 */
+function attachCitations(div, citations) {
+  if (!citations || citations.length === 0) return;
+  const details = document.createElement('details');
+  details.className = 'citations';
+  details.open = true;
+  const summary = document.createElement('summary');
+  summary.textContent = `📋 引用法律条文（${citations.length} 条）`;
+  details.appendChild(summary);
+  const ul = document.createElement('ul');
+  for (const c of citations) {
+    const li = document.createElement('li');
+    li.innerHTML = `<code>《${lawName(c.law_id)}》第${c.article_no}条</code>`;
+    if (c.chapter) li.innerHTML += ` <small>（${c.chapter}）</small>`;
+    ul.appendChild(li);
+  }
+  details.appendChild(ul);
+  div.querySelector('.bubble').appendChild(details);
+}
+
+// ===== 新对话：游客/登录都清空当前，游客重置内存上下文，登录等下次提问自动建会话 =====
 function newChat() {
   chatArea.querySelectorAll('.msg').forEach(m => m.remove());
   if (welcome) welcome.style.display = 'flex';
   chatArea.scrollTop = 0;
   setSending(false);
+  currentSessionId = null;
+  guestHistory = [];
   historyList.querySelectorAll('.history-item').forEach(el => el.classList.remove('active'));
 }
 
@@ -411,10 +450,11 @@ function send(e) {
   e.preventDefault();
   const question = input.value.trim();
   if (!question) return;
+  lastQuestion = question;
 
   if (welcome) welcome.style.display = 'none';
 
-  addBubble('user', '您', question);
+  addBubble('user', currentUsername || '您', question);
 
   currentProgressMsg = addBubble('progress', '⚖️ 助手', '正在理解您的问题...');
   setSending(true);
@@ -425,16 +465,25 @@ function send(e) {
 /**
  * 用 fetch POST 发送问题，手动解析 SSE 流。
  * 不能用 EventSource：它只发 GET，而 /chat 是 POST 路由。
+ *
+ * 登录用户：带 session_id（null → 后端自动建会话并在 done 帧回 session_id）；
+ * 游客：带上本页多轮上下文 guestHistory，关页即没。
  */
 async function fetchSSE(question) {
   try {
     const headers = { 'Content-Type': 'application/json' };
-    if (getToken()) headers.Authorization = 'Bearer ' + getToken();
+    let body = { question };
+    if (getToken()) {
+      headers.Authorization = 'Bearer ' + getToken();
+      body.session_id = currentSessionId;
+    } else {
+      body.history = guestHistory;
+    }
 
     const resp = await fetch('/chat', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ question }),
+      body: JSON.stringify(body),
     });
 
     if (!resp.ok) {
@@ -467,8 +516,8 @@ async function fetchSSE(question) {
       }
     }
 
-    // 登录用户：回答完成后刷新侧边栏历史列表
-    if (getToken()) loadMyHistory();
+    // 登录用户：回答完成（done 帧已记入 currentSessionId）后刷新会话列表
+    if (getToken()) loadSessions();
   } catch (e) {
     updateProgress('❌ 网络错误: ' + e.message);
     setSending(false);
@@ -523,31 +572,24 @@ function finishDone(frame) {
     return;
   }
 
+  // 登录：首次提问后端会新建会话，done 帧回传 session_id，记作当前会话
+  if (getToken() && payload.session_id) {
+    currentSessionId = payload.session_id;
+  }
+  // 游客：把本轮问答推进多轮上下文（关页即没）；只留最近若干轮防膨胀
+  if (!getToken()) {
+    guestHistory.push({ role: 'user', content: lastQuestion });
+    guestHistory.push({ role: 'assistant', content: payload.answer || '（空回答）' });
+    if (guestHistory.length > 12) guestHistory.splice(0, guestHistory.length - 12);
+  }
+
   if (payload.refuse) {
     addBubble('assistant', '⚖️ 助手', payload.answer || '抱歉，无法就该问题给出明确结论。');
     return;
   }
 
   const div = addBubble('assistant', '⚖️ 助手', payload.answer || '（空回答）');
-
-  if (payload.citations && payload.citations.length > 0) {
-    const details = document.createElement('details');
-    details.className = 'citations';
-    details.open = true;
-    const summary = document.createElement('summary');
-    summary.textContent = `📋 引用法律条文（${payload.citations.length} 条）`;
-    details.appendChild(summary);
-
-    const ul = document.createElement('ul');
-    for (const c of payload.citations) {
-      const li = document.createElement('li');
-      li.innerHTML = `<code>《${lawName(c.law_id)}》第${c.article_no}条</code>`;
-      if (c.chapter) li.innerHTML += ` <small>（${c.chapter}）</small>`;
-      ul.appendChild(li);
-    }
-    details.appendChild(ul);
-    div.querySelector('.bubble').appendChild(details);
-  }
+  attachCitations(div, payload.citations || []);
 }
 
 /** error 帧：移除进度消息，显示错误 */

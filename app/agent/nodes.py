@@ -74,7 +74,7 @@ def make_answer_node(answerer: AnswerGenerator):
             "answer": AgentAnswer(
                 refuse=False,
                 rewritten=state["rewritten"],
-                answer=answerer.generate(state["rewritten"], hits),
+                answer=answerer.generate(state["rewritten"], hits, state.get("history")),
                 citations=citations,
             )
         }

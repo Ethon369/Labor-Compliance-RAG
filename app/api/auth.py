@@ -107,6 +107,30 @@ def ensure_user_schema(dsn: str) -> None:
             )
             """
         )
+        # 多轮会话（阶段 10 增强）：一个会话包含多条 user/assistant 消息
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                id         serial PRIMARY KEY,
+                user_id    integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                title      text NOT NULL DEFAULT '新对话',
+                created_at timestamptz NOT NULL DEFAULT now(),
+                updated_at timestamptz NOT NULL DEFAULT now()
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id         serial PRIMARY KEY,
+                session_id integer NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+                role       text NOT NULL CHECK (role IN ('user', 'assistant')),
+                content    text NOT NULL,
+                citations  text NOT NULL DEFAULT '[]',
+                created_at timestamptz NOT NULL DEFAULT now()
+            )
+            """
+        )
 
 
 def save_chat_history(dsn: str, user_id: int, question: str, answer: str, citations: list[dict]) -> None:
@@ -134,6 +158,59 @@ def load_user_history(dsn: str, user_id: int, limit: int) -> tuple[list[dict], i
         for q, a, c in rows
     ]
     return records, total
+
+
+# ---- 多轮会话工具函数 ----
+
+def create_session(dsn: str, user_id: int, title: str = "新对话") -> int:
+    """创建会话，返回 session_id。"""
+    with psycopg.connect(dsn) as conn:
+        row = conn.execute(
+            "INSERT INTO chat_sessions (user_id, title) VALUES (%s, %s) RETURNING id",
+            (user_id, title),
+        ).fetchone()
+    return row[0]
+
+
+def save_session_message(dsn: str, session_id: int, role: str, content: str, citations: list[dict] | None = None) -> None:
+    """在指定会话中保存一条消息，并更新会话 updated_at。"""
+    with psycopg.connect(dsn) as conn:
+        conn.execute(
+            "INSERT INTO chat_messages (session_id, role, content, citations) VALUES (%s, %s, %s, %s)",
+            (session_id, role, content, json.dumps(citations or [], ensure_ascii=False)),
+        )
+        conn.execute("UPDATE chat_sessions SET updated_at = now() WHERE id = %s", (session_id,))
+
+
+def list_user_sessions(dsn: str, user_id: int, limit: int = 50) -> list[dict]:
+    """该用户最近 limit 个会话（倒序，最新更新在前）。"""
+    with psycopg.connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT id, title, updated_at FROM chat_sessions WHERE user_id = %s "
+            "ORDER BY updated_at DESC LIMIT %s",
+            (user_id, limit),
+        ).fetchall()
+    return [{"id": r[0], "title": r[1], "updated_at": r[2].isoformat()} for r in rows]
+
+
+def load_session_messages(dsn: str, session_id: int, user_id: int | None = None) -> list[dict]:
+    """读取某会话的全部消息；若提供 user_id 则做拥有权校验。"""
+    with psycopg.connect(dsn) as conn:
+        if user_id is not None:
+            owner = conn.execute(
+                "SELECT user_id FROM chat_sessions WHERE id = %s", (session_id,)
+            ).fetchone()
+            if owner is None or owner[0] != user_id:
+                return []
+        rows = conn.execute(
+            "SELECT id, role, content, citations, created_at FROM chat_messages "
+            "WHERE session_id = %s ORDER BY id ASC",
+            (session_id,),
+        ).fetchall()
+    return [
+        {"id": r[0], "role": r[1], "content": r[2], "citations": json.loads(r[3]) if r[3] else [], "created_at": r[4].isoformat()}
+        for r in rows
+    ]
 
 
 # ---- 路由 ----

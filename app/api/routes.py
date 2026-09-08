@@ -26,11 +26,20 @@ from app.api.models import (
     SseChunk,
     ErrorResponse,
 )
-from app.api.auth import _bearer_user_id, load_user_history, save_chat_history
+from app.api.auth import (
+    _bearer_user_id,
+    create_session,
+    list_user_sessions,
+    load_session_messages,
+    load_user_history,
+    save_chat_history,
+    save_session_message,
+)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 _MAX_HISTORY = 200
+_MAX_CONTEXT_TURNS = 6  # 多轮上下文：取最近 N 轮问答喂给 LLM，防 prompt 过长
 
 
 def _sse_frame(data: dict) -> str:
@@ -42,7 +51,8 @@ def _sse_frame(data: dict) -> str:
     return f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
 
 
-async def _stream_chat(app, question: str, user_id: int | None = None, settings=None) -> AsyncIterator[str]:
+async def _stream_chat(app, question: str, history: list[dict], session_id: int | None = None,
+                       settings=None, uid: int | None = None) -> AsyncIterator[str]:
     """SSE 流式生成器：逐阶段推送进度事件，最后推送 done 帧。
 
     为什么不用 async for 在节点间插桩：当前 Graph compile 后 invoke 是同步的，
@@ -58,7 +68,7 @@ async def _stream_chat(app, question: str, user_id: int | None = None, settings=
         yield _sse_frame(SseChunk(stage="verifying", content="正在核验条文与问题的相关性..."))
 
         # 执行全链路——所有阶段在 invoke 内部完成，SSE 只发"进度提示"
-        result = app.invoke({"original": question})
+        result = app.invoke({"original": question, "history": history})
         answer = result["answer"]
 
         if answer.refuse:
@@ -66,7 +76,7 @@ async def _stream_chat(app, question: str, user_id: int | None = None, settings=
         else:
             yield _sse_frame(SseChunk(stage="answering", content="正在整理回答..."))
 
-        # 完成帧：携带最终答案 + 引用
+        # 完成帧：携带最终答案 + 引用 + 会话 id
         citations = [
             CitationBrief(
                 law_id=c.law_id,
@@ -79,17 +89,19 @@ async def _stream_chat(app, question: str, user_id: int | None = None, settings=
             refuse=answer.refuse,
             answer=answer.answer,
             citations=citations,
+            session_id=session_id,
         )
         yield _sse_frame(SseChunk(stage="done", content=json.dumps(done.model_dump(), ensure_ascii=False)))
 
-        # 登录用户：这条问答落库，供 /chat/history/mine 回看。
+        # 登录用户会话：这条问答作为两条消息写进 chat_messages。
         # 落库失败静默忽略——数据库抖动不该阻断回答本身。
-        if user_id and settings:
+        if uid and session_id and settings:
             try:
-                save_chat_history(
+                save_session_message(settings.database_url, session_id, "user", question)
+                save_session_message(
                     settings.database_url,
-                    user_id,
-                    question,
+                    session_id,
+                    "assistant",
                     answer.answer,
                     [c.model_dump() for c in answer.citations],
                 )
@@ -110,29 +122,42 @@ async def _stream_chat(app, question: str, user_id: int | None = None, settings=
 async def chat(req: ChatRequest, request: Request):
     """POST /chat：接收劳动争议问题，返回 SSE 流式响应。
 
-    调用示例：
-        curl -X POST http://localhost:8000/chat \\
-          -H "Content-Type: application/json" \\
-          -d '{"question":"公司拖欠我工资怎么办"}' \\
-          --no-buffer
-
-    客户端解析：每行 data: <json> 对应一个 SseChunk；
-    当 stage=="done" 时 content 字段是 ChatDonePayload 的 JSON 字符串。
+    session_id（登录用户）传了 → 续该会话（带历史上下文）；没传 → 新建会话。
+    游客：不落库，多轮靠请求里自带 history（前端内存维护，关页即没）。
     """
     settings = request.app.state.settings
     app = request.app.state.agent
     if app is None:
         raise HTTPException(status_code=503, detail="Agent 未就绪，请检查配置")
 
-    # 登录用户带有效 token → 取 user_id，问答落库；游客为 None，历史只进内存
-    user_id = _bearer_user_id(request, settings.auth_secret)
-    stream = _stream_chat(app, req.question, user_id=user_id, settings=settings)
+    uid = _bearer_user_id(request, settings.auth_secret)
+    session_id: int | None = req.session_id
 
-    # 游客历史：保存在内存（服务重启即清；见决策 07 取舍）
-    history: list = request.app.state.history
-    history.append({"question": req.question, "timestamp": None})
-    if len(history) > _MAX_HISTORY:
-        history.pop(0)
+    if uid:
+        # 登录用户：指定会话 → 校验归属并取其历史；否则新建会话（标题=问题首截）
+        if session_id is not None:
+            msgs = load_session_messages(settings.database_url, session_id, uid)
+            if not msgs:
+                raise HTTPException(status_code=404, detail="会话不存在或无权访问")
+        else:
+            title = req.question[:20]
+            session_id = create_session(settings.database_url, uid, title)
+            msgs = []
+        history = [
+            {"role": m["role"], "content": m["content"]}
+            for m in msgs[-_MAX_CONTEXT_TURNS:]
+        ]
+        stream = _stream_chat(app, req.question, history, session_id=session_id,
+                              settings=settings, uid=uid)
+    else:
+        # 游客：历史由前端上传（内存），不落库
+        history = [m.model_dump() for m in req.history[-_MAX_CONTEXT_TURNS:]]
+        stream = _stream_chat(app, req.question, history)
+        # 游客历史：仍进内存列表（见决策 07 取舍）
+        mem: list = request.app.state.history
+        mem.append({"question": req.question, "timestamp": None})
+        if len(mem) > _MAX_HISTORY:
+            mem.pop(0)
 
     return StreamingResponse(
         stream,
@@ -143,6 +168,31 @@ async def chat(req: ChatRequest, request: Request):
             "X-Accel-Buffering": "no",  # 告知 nginx 不做缓冲（见决策 07）
         },
     )
+
+
+@router.get("/sessions")
+async def chat_sessions(request: Request, limit: int = 50):
+    """GET /chat/sessions：登录用户的会话列表（倒序，最新在前）。"""
+    settings = request.app.state.settings
+    uid = _bearer_user_id(request, settings.auth_secret)
+    if uid is None:
+        raise HTTPException(status_code=401, detail="未登录或登录已过期")
+    if limit < 1 or limit > _MAX_HISTORY:
+        limit = 50
+    return {"sessions": list_user_sessions(settings.database_url, uid, limit)}
+
+
+@router.get("/sessions/{session_id}/messages")
+async def chat_session_messages(session_id: int, request: Request):
+    """GET /chat/sessions/{id}/messages：某会话的全部多轮消息。"""
+    settings = request.app.state.settings
+    uid = _bearer_user_id(request, settings.auth_secret)
+    if uid is None:
+        raise HTTPException(status_code=401, detail="未登录或登录已过期")
+    msgs = load_session_messages(settings.database_url, session_id, uid)
+    if not msgs:
+        raise HTTPException(status_code=404, detail="会话不存在或无权访问")
+    return {"messages": msgs}
 
 
 @router.get("/history")
