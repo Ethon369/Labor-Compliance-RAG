@@ -6,7 +6,9 @@
 <title>劳动争议智能合规助手</title>
 <style>
   :root {
-    --bg: #f5f5f5;
+    /* 用户拍板配色：浅灰侧边栏 + 纯白消息区 */
+    --sidebar-bg: #f2f3f5;
+    --bg: #ffffff;
     --card: #ffffff;
     --primary: #4f46e5;
     --primary-hover: #4338ca;
@@ -14,8 +16,8 @@
     --text-muted: #6b7280;
     --border: #e5e7eb;
     --user-bubble: #4f46e5;
-    --assistant-bubble: #ffffff;
-    --progress-bubble: #f3f4f6;
+    --assistant-bubble: #f7f8fa;   /* 白底上助手气泡用浅灰区分，否则看不清 */
+    --progress-bubble: #eef0f3;
     --radius: 12px;
     --shadow: 0 1px 3px rgba(0,0,0,.08);
   }
@@ -24,136 +26,157 @@
 
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
-    background: var(--bg);
+    background: var(--sidebar-bg);   /* 外层用侧边栏灰打底，避免滚动断层露白 */
     color: var(--text);
-    height: 100vh; display: flex; flex-direction: column;
+    height: 100vh; display: flex;
   }
 
-  /* ---- 标题栏 ---- */
-  .header {
-    background: var(--card);
-    border-bottom: 1px solid var(--border);
-    padding: 14px 24px; display: flex; align-items: center; gap: 10px;
-    box-shadow: var(--shadow); z-index: 10;
+  /* ---- 左侧边栏（浅灰）---- */
+  .sidebar {
+    width: 240px; flex-shrink: 0; background: var(--sidebar-bg);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 6px; padding: 16px 12px;
   }
-  .header .logo { font-size: 22px; }
+  .sidebar .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; padding: 4px 8px 10px; }
+  .sidebar .brand .logo { font-size: 20px; }
+  .new-chat {
+    background: #fff; border: 1px solid var(--border); border-radius: 10px;
+    padding: 9px 12px; text-align: left; cursor: pointer; font-size: 14px;
+    transition: border-color .15s;
+  }
+  .new-chat:hover { border-color: var(--primary); }
+  .history-title { font-size: 12px; color: var(--text-muted); padding: 10px 8px 4px; }
+  .history-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+  .history-item {
+    padding: 8px 10px; border-radius: 8px; font-size: 14px; cursor: pointer;
+    color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    transition: background .15s;
+  }
+  .history-item:hover { background: #e9eaee; }
+  .history-item.active { background: #fff; color: var(--text); box-shadow: var(--shadow); }
+  .sidebar .foot { font-size: 11px; color: var(--text-muted); padding: 8px; border-top: 1px solid var(--border); }
+
+  /* ---- 右侧主区（纯白）---- */
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+
+  .header {
+    background: var(--card); border-bottom: 1px solid var(--border);
+    padding: 14px 24px; display: flex; align-items: center; gap: 10px; z-index: 10;
+  }
   .header h1 { font-size: 18px; font-weight: 600; }
   .header .badge {
     font-size: 11px; background: #eef2ff; color: var(--primary);
     padding: 3px 10px; border-radius: 99px; margin-left: auto;
   }
 
-  /* ---- 消息区 ---- */
   .chat-area {
-    flex: 1; overflow-y: auto; padding: 20px 24px;
+    flex: 1; overflow-y: auto; padding: 24px;
     display: flex; flex-direction: column; gap: 16px;
   }
 
   /* 消息气泡通用 */
-  .msg {
-    display: flex; flex-direction: column; max-width: 80%; animation: fadeIn .25s ease;
-  }
+  .msg { display: flex; flex-direction: column; max-width: 80%; animation: fadeIn .25s ease; }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-
-  .msg.user   { align-self: flex-end; }
+  .msg.user { align-self: flex-end; }
   .msg.assistant { align-self: flex-start; }
-
-  .msg .bubble {
-    padding: 12px 16px; border-radius: var(--radius); line-height: 1.65;
-    font-size: 15px; word-break: break-word;
-  }
-  .msg.user .bubble {
-    background: var(--user-bubble); color: #fff;
-    border-bottom-right-radius: 4px;
-  }
-  .msg.assistant .bubble {
-    background: var(--assistant-bubble); color: var(--text);
-    border: 1px solid var(--border); border-bottom-left-radius: 4px;
-    box-shadow: var(--shadow);
-  }
-  .msg.progress .bubble {
-    background: var(--progress-bubble); color: var(--text-muted);
-    border: 1px dashed var(--border); font-size: 14px;
-  }
-
-  .msg .label {
-    font-size: 12px; color: var(--text-muted); margin-bottom: 4px;
-  }
+  .msg .label { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
   .msg.user .label { text-align: right; }
+  .msg .bubble { padding: 12px 16px; border-radius: var(--radius); line-height: 1.65; font-size: 15px; word-break: break-word; }
+  .msg.user .bubble { background: var(--user-bubble); color: #fff; border-bottom-right-radius: 4px; }
+  .msg.assistant .bubble { background: var(--assistant-bubble); color: var(--text); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+  .msg.progress .bubble { background: var(--progress-bubble); color: var(--text-muted); border: 1px dashed var(--border); font-size: 14px; }
 
   /* 引用区 */
-  .citations {
-    margin-top: 10px; padding: 10px 14px; background: #f0fdf4; border: 1px solid #bbf7d0;
-    border-radius: 8px; font-size: 13px;
-  }
+  .citations { margin-top: 10px; padding: 10px 14px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; font-size: 13px; }
   .citations summary { cursor: pointer; font-weight: 600; color: #166534; }
   .citations ul { margin-top: 6px; padding-left: 18px; }
   .citations li { margin-bottom: 4px; color: var(--text); }
   .citations code { background: #d1fae5; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
 
-  /* 欢迎区（空状态） */
-  .welcome {
-    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-    color: var(--text-muted); text-align: center; padding: 40px;
+  /* 欢迎区（空状态）：白色背景上靠卡片边框/阴影分隔 */
+  .welcome { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .welcome .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 18px;
+    padding: 40px 48px; box-shadow: var(--shadow); text-align: center;
+    max-width: 640px;
   }
-  .welcome .icon { font-size: 56px; margin-bottom: 16px; }
+  .welcome .icon { font-size: 52px; margin-bottom: 14px; }
   .welcome h2 { font-size: 20px; margin-bottom: 8px; color: var(--text); }
+  .welcome p { color: var(--text-muted); font-size: 14px; line-height: 1.7; }
   .welcome .hints { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; justify-content: center; }
   .welcome .hint {
-    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 10px 16px; font-size: 14px; cursor: pointer; transition: border-color .15s;
+    background: #f7f8fa; border: 1px solid var(--border); border-radius: 10px;
+    padding: 9px 16px; font-size: 14px; cursor: pointer; transition: border-color .15s;
   }
   .welcome .hint:hover { border-color: var(--primary); }
 
   /* ---- 输入区 ---- */
   .input-area {
     background: var(--card); border-top: 1px solid var(--border);
-    padding: 14px 24px; display: flex; gap: 10px; box-shadow: 0 -1px 3px rgba(0,0,0,.04);
+    padding: 16px 24px; display: flex; gap: 10px;
   }
   .input-area input {
     flex: 1; border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 10px 16px; font-size: 15px; outline: none; transition: border-color .15s;
+    padding: 12px 16px; font-size: 15px; outline: none; background: #f7f8fa;
+    transition: border-color .15s, background .15s;
   }
-  .input-area input:focus { border-color: var(--primary); }
+  .input-area input:focus { border-color: var(--primary); background: #fff; }
+  .input-area input:disabled { background: #f3f4f6; }
   .input-area button {
     background: var(--primary); color: #fff; border: none; border-radius: var(--radius);
-    padding: 10px 22px; font-size: 15px; font-weight: 600; cursor: pointer;
-    transition: background .15s;
+    padding: 12px 26px; font-size: 15px; font-weight: 600; cursor: pointer; transition: background .15s;
   }
   .input-area button:hover { background: var(--primary-hover); }
   .input-area button:disabled { opacity: .5; cursor: not-allowed; }
+
+  @media (max-width: 768px) { .sidebar { display: none; } }
 </style>
 </head>
 <body>
 
-<!-- 标题栏 -->
-<header class="header">
-  <span class="logo">⚖️</span>
-  <h1>劳动争议智能合规助手</h1>
-  <span class="badge">RAG · 检索增强生成</span>
-</header>
-
-<!-- 消息区 -->
-<main class="chat-area" id="chatArea">
-  <div class="welcome" id="welcome">
-    <div class="icon">⚖️</div>
-    <h2>劳动争议智能问答</h2>
-    <p>基于《劳动法》《劳动合同法》原文，检索相关条款并给出带条文引用的回答。</p>
-    <div class="hints">
-      <span class="hint" onclick="sendHint(this.textContent)">公司拖欠我加班费怎么办</span>
-      <span class="hint" onclick="sendHint(this.textContent)">被辞退后经济补偿金怎么算</span>
-      <span class="hint" onclick="sendHint(this.textContent)">公司能收我押金或扣我身份证吗</span>
-      <span class="hint" onclick="sendHint(this.textContent)">试用期最长可以约定多久</span>
-    </div>
+<!-- 左侧边栏（浅灰）：新对话 + 会话列表占位。B-3 再接 /chat/history 填真数据 -->
+<aside class="sidebar">
+  <div class="brand"><span class="logo">⚖️</span>劳动合规 RAG</div>
+  <button class="new-chat" onclick="newChat()">＋ 新对话</button>
+  <div class="history-title">最近会话</div>
+  <div class="history-list" id="historyList">
+    <div class="history-item active" data-is-new="1" onclick="selectHistory(this)">新对话</div>
+    <div class="history-item" onclick="selectHistory(this)">公司拖欠我加班费怎么办</div>
+    <div class="history-item" onclick="selectHistory(this)">被辞退后经济补偿金怎么算</div>
+    <div class="history-item" onclick="selectHistory(this)">公司能收押金或扣身份证吗</div>
+    <div class="history-item" onclick="selectHistory(this)">试用期最长可以约定多久</div>
   </div>
-</main>
+  <div class="foot">会话列表 · 待接入历史接口</div>
+</aside>
 
-<!-- 输入区 -->
-<form class="input-area" id="inputForm" onsubmit="send(event)">
-  <input id="questionInput" type="text" placeholder="输入您的劳动争议问题..."
-         autocomplete="off" autofocus>
-  <button type="submit" id="sendBtn">发送</button>
-</form>
+<div class="main">
+  <header class="header">
+    <h1>新对话</h1>
+    <span class="badge">RAG · 检索增强生成</span>
+  </header>
+
+  <main class="chat-area" id="chatArea">
+    <div class="welcome" id="welcome">
+      <div class="card">
+        <div class="icon">⚖️</div>
+        <h2>劳动争议智能问答</h2>
+        <p>基于《劳动法》《劳动合同法》原文，检索相关条款并给出带条文引用的回答。</p>
+        <div class="hints">
+          <span class="hint" onclick="sendHint(this.textContent)">公司拖欠我加班费怎么办</span>
+          <span class="hint" onclick="sendHint(this.textContent)">被辞退后经济补偿金怎么算</span>
+          <span class="hint" onclick="sendHint(this.textContent)">公司能收我押金或扣我身份证吗</span>
+          <span class="hint" onclick="sendHint(this.textContent)">试用期最长可以约定多久</span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <form class="input-area" id="inputForm" onsubmit="send(event)">
+    <input id="questionInput" type="text" placeholder="输入您的劳动争议问题..."
+           autocomplete="off" autofocus>
+    <button type="submit" id="sendBtn">发送</button>
+  </form>
+</div>
 
 <script>
 // ===== DOM 引用 =====
@@ -162,9 +185,26 @@ const welcome   = document.getElementById('welcome');
 const input     = document.getElementById('questionInput');
 const sendBtn   = document.getElementById('sendBtn');
 const form      = document.getElementById('inputForm');
+const historyList = document.getElementById('historyList');
 
-let currentEventSource = null;      // 当前 SSE 连接
-let currentProgressMsg = null;      // 当前进度消息 DOM（用于更新文本）
+let currentProgressMsg = null;   // 当前进度消息 DOM（用于更新文本）
+
+// ===== 侧边栏（占位交互，B-3 接入 /chat/history）=====
+function newChat() {
+  // 清空消息区、恢复欢迎卡片，重置输入
+  chatArea.querySelectorAll('.msg').forEach(m => m.remove());
+  if (welcome) welcome.style.display = 'flex';
+  chatArea.scrollTop = 0;
+  setSending(false);
+  historyList.querySelectorAll('.history-item').forEach(el =>
+    el.classList.toggle('active', el.dataset.isNew === '1'));
+}
+
+function selectHistory(el) {
+  // 占位：只切换选中态；接入历史后改为加载该会话
+  historyList.querySelectorAll('.history-item').forEach(x => x.classList.remove('active'));
+  el.classList.add('active');
+}
 
 // ===== 发送消息 =====
 function sendHint(text) { input.value = text; send(new Event('submit')); }
@@ -174,33 +214,21 @@ function send(e) {
   const question = input.value.trim();
   if (!question) return;
 
-  // 隐藏欢迎区
   if (welcome) welcome.style.display = 'none';
 
   // 添加用户气泡
   addBubble('user', '您', question);
 
-  // 断开上一个 SSE（如果有）
-  if (currentEventSource) { currentEventSource.close(); currentEventSource = null; }
-
-  // 添加占位进度消息
+  // 占位进度消息：后续各阶段帧更新它的文本
   currentProgressMsg = addBubble('progress', '⚖️ 助手', '正在理解您的问题...');
   setSending(true);
 
-  // 启动 SSE
-  const evtSource = new EventSource('/chat?' + new URLSearchParams({question}));
-  currentEventSource = evtSource;
-
-  // SSE 只支持 GET——我们的 /chat 路由是 POST。用 fetch + ReadableStream 替代 EventSource。
-  // 实际上 EventSource 不能发 POST，所以改用 fetch + 手动解析 SSE。
-  evtSource.close();  // 关掉 GET 请求的 EventSource
-
-  // 正确方式：fetch POST + ReadableStream
   fetchSSE(question);
 }
 
 /**
- * 用 fetch POST 发送问题，手动解析 SSE 流
+ * 用 fetch POST 发送问题，手动解析 SSE 流。
+ * 不能用 EventSource：它只发 GET，而 /chat 是 POST 路由。
  */
 async function fetchSSE(question) {
   try {
@@ -227,9 +255,9 @@ async function fetchSSE(question) {
 
       buffer += decoder.decode(value, { stream: true });
 
-      // 按 \n\n 分割 SSE 帧
+      // 按空行分包：SSE 帧之间以 \n\n 分隔
       const parts = buffer.split('\n\n');
-      buffer = parts.pop() || '';  // 最后一个可能是不完整的帧
+      buffer = parts.pop() || '';  // 最后一段可能是不完整帧
 
       for (const part of parts) {
         const line = part.trim();
@@ -237,9 +265,7 @@ async function fetchSSE(question) {
         try {
           const frame = JSON.parse(line.slice(6));
           handleFrame(frame);
-        } catch (e) {
-          // 非 JSON 帧忽略
-        }
+        } catch (e) { /* 非 JSON 帧忽略 */ }
       }
     }
   } catch (e) {
@@ -265,15 +291,12 @@ function handleFrame(frame) {
     case 'answering':
       updateProgress(frame.content || stageMap[frame.stage]);
       break;
-
     case 'refusing':
       updateProgress(frame.content || stageMap.refusing);
       break;
-
     case 'done':
       finishDone(frame);
       break;
-
     case 'error':
       finishError(frame);
       break;
@@ -293,9 +316,8 @@ function finishDone(frame) {
   setSending(false);
 
   let payload;
-  try {
-    payload = JSON.parse(frame.content);
-  } catch (e) {
+  try { payload = JSON.parse(frame.content); }
+  catch (e) {
     addBubble('assistant', '⚖️ 助手', frame.content || '（空回答）');
     return;
   }
