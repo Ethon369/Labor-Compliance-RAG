@@ -70,11 +70,17 @@ class CitationBrief(BaseModel):
 
 
 class ChatDonePayload(BaseModel):
-    """SSE done 帧的完整载荷：答案 + 拒答标记 + 引用列表 + 会话定位。"""
+    """SSE done 帧的完整载荷：答案 + 拒答标记 + 引用列表 + 会话定位 + 耗时打点。
+
+    elapsed_ms / graph_ms 供观测：前者是整条 SSE 链路耗时，后者是"检索+生成"图执行
+    耗时。前端默认忽略这两个字段，只在需要观测时读。
+    """
     refuse: bool = False
     answer: str
     citations: list[CitationBrief] = []
     session_id: int | None = None
+    elapsed_ms: float | None = None
+    graph_ms: float | None = None
 
 
 class ErrorResponse(BaseModel):

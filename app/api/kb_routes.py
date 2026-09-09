@@ -27,6 +27,7 @@ from app.api.models import (
     UpdateKbRequest,
 )
 from app.core.config import Settings
+from app.core.ratelimit import rate_limit
 from app.kb import pipeline
 from app.kb import store
 from app.kb.parser import detect_source_type
@@ -153,11 +154,13 @@ async def list_documents(request: Request, page: int = 1, page_size: int = 20,
 @router.post("/{kb_id}/documents")
 async def upload_document(request: Request, background: BackgroundTasks,
                           file: UploadFile = File(...),
-                          _user: CurrentUser = Depends(require_kb_access(write=True))):
+                          _user: CurrentUser = Depends(require_kb_access(write=True)),
+                          _rl: None = Depends(rate_limit(10, 1 / 60))):
     """上传文档：登记 pending 行 → 后台流水线处理 → 立即返回 doc_id 供轮询。
 
     流式读盘而不是 `await file.read()` 整体进内存：后者等于把内存上限交给客户端，
-    10MB 的文件 × 并发上传足以把进程顶翻。
+    10MB 的文件 × 并发上传足以把进程顶翻。限流 10 次/分钟：上传会触发解析+向量化，
+    是最重的写路径。
     """
     dsn = request.app.state.settings.database_url
     kb_id = int(request.path_params["kb_id"])

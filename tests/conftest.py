@@ -8,6 +8,17 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limits():
+    """每个测试前清空限流状态：限流是进程级单例，不 reset 会让连续测试互相踩 429。"""
+    from app.core.ratelimit import _limiter, login_guard
+    _limiter.reset_all()
+    login_guard.reset_all()
+    yield

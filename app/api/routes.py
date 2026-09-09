@@ -13,11 +13,14 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 import traceback
 from typing import AsyncIterator
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+
+from app.core.ratelimit import rate_limit
 
 from app.api.models import (
     ChatRequest,
@@ -67,6 +70,8 @@ async def _stream_chat(app, question: str, history: list[dict], session_id: int 
     queue.get() 逐段取出、逐段 yield——既真逐 token 打字机，事件循环也一直空闲。
     （LangGraph astream_events 逐节点事件留待后续，见决策 07 取舍。）
     """
+    t_start = time.perf_counter()
+    graph_ms: list = [None]  # 用列表承载：run_graph 线程里写，主流程读
     try:
         # 阶段 1-3：改写/检索/核验的"进度提示"。这些步骤短，先发帧占位；
         # 耗时在 answer 节点的 LLM 上，那里才需要真正的逐 token 推送。
@@ -84,6 +89,7 @@ async def _stream_chat(app, question: str, history: list[dict], session_id: int 
         def run_graph() -> None:
             """守护线程：注入 token 接收器后同步跑完整链路，把片段/结果投进队列。"""
             ctx = answer_sink_set(on_token)  # answer 节点据此拿到本请求的接收器
+            g0 = time.perf_counter()
             try:
                 result = app.invoke({
                     "original": question, "history": history, "kb_ids": kb_ids,
@@ -94,6 +100,7 @@ async def _stream_chat(app, question: str, history: list[dict], session_id: int 
                 return
             finally:
                 answer_sink_reset(ctx)
+            graph_ms[0] = (time.perf_counter() - g0) * 1000
             # 关键顺序：token 都在 invoke 期间投递，result 一定在最后 → 队列天然有序
             loop.call_soon_threadsafe(queue.put_nowait, ("result", answer))
 
@@ -148,6 +155,8 @@ async def _stream_chat(app, question: str, history: list[dict], session_id: int 
             answer=answer.answer,
             citations=citations,
             session_id=session_id,
+            elapsed_ms=(time.perf_counter() - t_start) * 1000,
+            graph_ms=graph_ms[0],
         )
         yield _sse_frame(SseChunk(stage="done", content=json.dumps(done.model_dump(), ensure_ascii=False)))
 
@@ -177,11 +186,13 @@ async def _stream_chat(app, question: str, history: list[dict], session_id: int 
 
 
 @router.post("")
-async def chat(req: ChatRequest, request: Request):
+async def chat(req: ChatRequest, request: Request,
+               _rl: None = Depends(rate_limit(30, 1 / 2))):
     """POST /chat：接收劳动争议问题，返回 SSE 流式响应。
 
     session_id（登录用户）传了 → 续该会话（带历史上下文）；没传 → 新建会话。
     游客：不落库，多轮靠请求里自带 history（前端内存维护，关页即没）。
+    限流 30 次/2 秒：问答是最重路径（检索+LLM），也是被刷成本最高的入口。
     """
     settings = request.app.state.settings
     app = request.app.state.agent
@@ -239,15 +250,16 @@ async def chat(req: ChatRequest, request: Request):
 
 
 @router.get("/sessions")
-async def chat_sessions(request: Request, limit: int = 50):
-    """GET /chat/sessions：登录用户的会话列表（倒序，最新在前）。"""
+async def chat_sessions(request: Request, page: int = 1, page_size: int = 50):
+    """GET /chat/sessions：登录用户的会话列表（分页，倒序，最新在前）。"""
     settings = request.app.state.settings
     uid = _bearer_user_id(request, settings.auth_secret)
     if uid is None:
         raise HTTPException(status_code=401, detail="未登录或登录已过期")
-    if limit < 1 or limit > _MAX_HISTORY:
-        limit = 50
-    return {"sessions": list_user_sessions(settings.database_url, uid, limit)}
+    page = max(1, page)
+    page_size = min(max(1, page_size), 100)
+    records, total = list_user_sessions(settings.database_url, uid, page, page_size)
+    return {"sessions": records, "total": total, "page": page, "page_size": page_size}
 
 
 @router.get("/sessions/{session_id}/messages")
@@ -264,30 +276,30 @@ async def chat_session_messages(session_id: int, request: Request):
 
 
 @router.get("/history")
-async def chat_history(request: Request, limit: int = 50):
-    """GET /chat/history：返回最近 limit 条会话记录（倒序，最新在前）。
+async def chat_history(request: Request, page: int = 1, page_size: int = 50):
+    """GET /chat/history：返回内存中的会话记录（分页，倒序，最新在前）。
 
     仅返回存于内存的历史；服务重启后清空。
     个人展示项目不持久化——面试演示场景重启丢失是可接受的。
     """
     history: list = request.app.state.history
-    if limit < 1:
-        limit = 50
-    if limit > _MAX_HISTORY:
-        limit = _MAX_HISTORY
-    return {"history": list(reversed(history[-limit:])), "total": len(history)}
+    page = max(1, page)
+    page_size = min(max(1, page_size), 100)
+    total = len(history)
+    start = max(0, total - page * page_size)
+    end = total - (page - 1) * page_size
+    return {"history": list(reversed(history[start:end])),
+            "total": total, "page": page, "page_size": page_size}
 
 
 @router.get("/history/mine")
-async def chat_history_mine(request: Request, limit: int = 50):
-    """GET /chat/history/mine：登录用户自己的问答历史（DB 持久化，重启不丢）。"""
+async def chat_history_mine(request: Request, page: int = 1, page_size: int = 50):
+    """GET /chat/history/mine：登录用户自己的问答历史（分页，DB 持久化，重启不丢）。"""
     settings = request.app.state.settings
     uid = _bearer_user_id(request, settings.auth_secret)
     if uid is None:
         raise HTTPException(status_code=401, detail="未登录或登录已过期")
-    if limit < 1:
-        limit = 50
-    if limit > _MAX_HISTORY:
-        limit = _MAX_HISTORY
-    records, total = load_user_history(settings.database_url, uid, limit)
-    return {"history": records, "total": total}
+    page = max(1, page)
+    page_size = min(max(1, page_size), 100)
+    records, total = load_user_history(settings.database_url, uid, page, page_size)
+    return {"history": records, "total": total, "page": page, "page_size": page_size}

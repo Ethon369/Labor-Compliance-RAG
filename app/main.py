@@ -9,9 +9,11 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
+from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -25,6 +27,22 @@ from app.core.config import Settings
 from app.core.db import close_pools
 from app.kb.schema import ensure_kb_schema
 from app.rag.retriever import build_retriever
+
+
+class CacheStaticFiles(StaticFiles):
+    """给静态资源按扩展名加 Cache-Control，静态资产可被浏览器长缓存。
+
+    只对"内容可指纹化"的扩展名缓存：.js/.css/.png/.svg 等改版时要么换文件名、
+    要么由开发者手动刷新；html 与其它文件不缓存，保证页面与接口始终最新。
+    """
+    _CACHEABLE = {".js", ".css", ".png", ".svg", ".ico", ".woff2", ".woff", ".ttf"}
+    _MAX_AGE = 86400  # 24h：本地演示够用，太长会阻碍开发期改版
+
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        resp = super().file_response(full_path, stat_result, scope, status_code)
+        if Path(full_path).suffix.lower() in self._CACHEABLE:
+            resp.headers["Cache-Control"] = f"public, max-age={self._MAX_AGE}"
+        return resp
 
 
 @asynccontextmanager
@@ -62,6 +80,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# GZip 压响应：只压 >1KB 的，小响应压缩收益低还费 CPU。
+# 中间件是栈式，后 add 的在外层——GZip 放 CORS 之后，压缩的是最终响应体。
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+
+@app.middleware("http")
+async def add_request_id(request, call_next):
+    """给每个请求挂 X-Request-Id：透传上游 id，没有则生成一个。
+
+    观测用途：日志里带着同一个 id，能把"一条请求"在检索/LLM/DB 各段的耗时串起来
+    定位。响应头回显同一个 id，前端报障时贴出来即可定位到具体请求。
+    """
+    rid = request.headers.get("x-request-id") or uuid4().hex[:12]
+    response = await call_next(request)
+    response.headers["x-request-id"] = rid
+    return response
 
 # 顺序：auth → admin → chat → kb，最后才挂静态目录。
 # StaticFiles 挂在最后是因为它匹配 "/" 前缀，放前面会把 /docs、/chat、/kb 全吃掉。
@@ -73,7 +107,7 @@ app.include_router(kb_router)
 # 挂载静态前端：放在路由之后，避免抢占 /docs、/chat 等路径。
 # index.html 由 StaticFiles(html=True) 作为默认首页提供。
 static_dir = Path(__file__).resolve().parent / "static"
-app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+app.mount("/", CacheStaticFiles(directory=static_dir, html=True), name="static")
 
 
 # ---- 统一异常处理 ----

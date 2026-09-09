@@ -174,28 +174,28 @@ def test_history_records_questions(client_with_agent):
     assert data["history"][1]["question"] == "问题A"
 
 
-def test_history_limit():
-    """limit 参数应限制返回数量。注入在 lifespan 之后。"""
+def test_history_pagination():
+    """page/page_size 分页：默认返回最新的一页，total 返回总数。"""
     with TestClient(fastapi_app) as client:
         fastapi_app.state.history = [{"question": f"Q{i}"} for i in range(10)]
-        resp = client.get("/chat/history", params={"limit": 3})
+        resp = client.get("/chat/history", params={"page": 1, "page_size": 3})
     data = resp.json()
     assert len(data["history"]) == 3
     assert data["total"] == 10
 
 
-def test_history_limit_min_clamped():
-    """limit < 1 应被 clamp 到 50。注入在 lifespan 之后。"""
+def test_history_page_size_clamped():
+    """page_size 越界被 clamp（0→1），不报错。注入在 lifespan 之后。"""
     with TestClient(fastapi_app) as client:
         fastapi_app.state.history = [{"question": "Q"}]
-        resp = client.get("/chat/history", params={"limit": 0})
+        resp = client.get("/chat/history", params={"page_size": 0})
     assert resp.status_code == 200
 
 
-def test_history_invalid_limit():
-    """非数字 limit 被 FastAPI 校验拦截。"""
+def test_history_invalid_page_size():
+    """非数字 page_size 被 FastAPI 校验拦截。"""
     with TestClient(fastapi_app) as client:
-        resp = client.get("/chat/history", params={"limit": "abc"})
+        resp = client.get("/chat/history", params={"page_size": "abc"})
     assert resp.status_code == 422
 
 

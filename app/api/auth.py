@@ -15,7 +15,8 @@ import secrets
 import time
 
 from app.core.db import pool_conn
-from fastapi import APIRouter, HTTPException, Request
+from app.core.ratelimit import client_ip, login_guard, rate_limit
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.api.models import AuthRequest, AuthResponse, ChangePasswordRequest, MeResponse
 
@@ -233,16 +234,19 @@ def save_chat_history(dsn: str, user_id: int, question: str, answer: str, citati
         )
 
 
-def load_user_history(dsn: str, user_id: int, limit: int) -> tuple[list[dict], int]:
-    """该用户最近 limit 条问答（倒序，最新在前）。返回 (records, total)。"""
+def load_user_history(dsn: str, user_id: int, page: int = 1,
+                      page_size: int = 50) -> tuple[list[dict], int]:
+    """该用户问答历史的分页列表（倒序，最新在前）。返回 (records, total)。"""
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 100)
     with pool_conn(dsn) as conn:
         total = conn.execute(
             "SELECT count(*) FROM chat_history WHERE user_id = %s", (user_id,)
         ).fetchone()[0]
         rows = conn.execute(
             "SELECT question, answer, citations FROM chat_history "
-            "WHERE user_id = %s ORDER BY id DESC LIMIT %s",
-            (user_id, limit),
+            "WHERE user_id = %s ORDER BY id DESC LIMIT %s OFFSET %s",
+            (user_id, page_size, (page - 1) * page_size),
         ).fetchall()
     records = [
         {"question": q, "answer": a, "citations": json.loads(c) if c else []}
@@ -283,20 +287,27 @@ def save_session_message(dsn: str, session_id: int, role: str, content: str, cit
         conn.execute("UPDATE chat_sessions SET updated_at = now() WHERE id = %s", (session_id,))
 
 
-def list_user_sessions(dsn: str, user_id: int, limit: int = 50) -> list[dict]:
-    """该用户最近 limit 个会话（倒序，最新更新在前）。
+def list_user_sessions(dsn: str, user_id: int, page: int = 1,
+                        page_size: int = 50) -> tuple[list[dict], int]:
+    """该用户会话的分页列表（倒序，最新更新在前）。返回 (records, total)。
 
     带 kb_id：前端打开历史会话时按它把 header 的知识库选择器同步成会话绑定的库，
     避免出现"看的是 A 库的历史、下一问却发到 B 库"的错位。
     """
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 100)
     with pool_conn(dsn) as conn:
+        total = conn.execute(
+            "SELECT count(*) FROM chat_sessions WHERE user_id = %s", (user_id,)
+        ).fetchone()[0]
         rows = conn.execute(
             "SELECT id, title, updated_at, kb_id FROM chat_sessions WHERE user_id = %s "
-            "ORDER BY updated_at DESC LIMIT %s",
-            (user_id, limit),
+            "ORDER BY updated_at DESC LIMIT %s OFFSET %s",
+            (user_id, page_size, (page - 1) * page_size),
         ).fetchall()
-    return [{"id": r[0], "title": r[1], "updated_at": r[2].isoformat(),
-             "kb_id": r[3]} for r in rows]
+    records = [{"id": r[0], "title": r[1], "updated_at": r[2].isoformat(),
+                "kb_id": r[3]} for r in rows]
+    return records, total
 
 
 def load_session_messages(dsn: str, session_id: int, user_id: int | None = None) -> list[dict]:
@@ -322,8 +333,11 @@ def load_session_messages(dsn: str, session_id: int, user_id: int | None = None)
 # ---- 路由 ----
 
 @router.post("/register")
-async def register(req: AuthRequest, request: Request):
-    """注册：用户名查重 → 哈希入库 → 直接返回 token（免二次登录）。新用户恒为普通用户。"""
+async def register(req: AuthRequest, request: Request,
+                   _rl: None = Depends(rate_limit(5, 1 / 60))):
+    """注册：用户名查重 → 哈希入库 → 直接返回 token（免二次登录）。新用户恒为普通用户。
+
+    限流 5 次/分钟：注册是批量造号入口，防脚本刷号。"""
     settings = request.app.state.settings
     with pool_conn(settings.database_url) as conn:
         dup = conn.execute("SELECT 1 FROM users WHERE username = %s", (req.username,)).fetchone()
@@ -339,19 +353,28 @@ async def register(req: AuthRequest, request: Request):
 
 
 @router.post("/login")
-async def login(req: AuthRequest, request: Request):
+async def login(req: AuthRequest, request: Request,
+                _rl: None = Depends(rate_limit(20, 1 / 2))):
     """登录：查用户 → 验密码 → 发 token。
 
     密码错与账号被禁用都返回 401 同一句话——不暴露"这个账号存在但被禁了"，
-    否则等于给攻击者一个枚举有效用户名的信号。"""
+    否则等于给攻击者一个枚举有效用户名的信号。
+
+    防爆破分两层：普通令牌桶限频（20 次/2 秒）；连续失败 5 次封禁 60 秒
+    （LoginGuard，成功登录即清零）。"""
     settings = request.app.state.settings
+    ip = client_ip(request)
+    if login_guard.is_blocked(ip):
+        raise HTTPException(status_code=429, detail="失败次数过多，请 1 分钟后再试")
     with pool_conn(settings.database_url) as conn:
         row = conn.execute(
             "SELECT id, password_hash, role, disabled FROM users WHERE username = %s",
             (req.username,),
         ).fetchone()
     if row is None or row[3] or not verify_password(req.password, row[1]):
+        login_guard.record_failure(ip)
         raise HTTPException(status_code=401, detail="用户名或密码错误")
+    login_guard.reset(ip)
     token = make_token(row[0], settings.auth_secret)
     return AuthResponse(token=token, username=req.username, role=row[2])
 
