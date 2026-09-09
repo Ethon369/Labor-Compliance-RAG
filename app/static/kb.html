@@ -74,6 +74,14 @@
 
   .empty { text-align: center; color: var(--text-muted); padding: 60px 0; font-size: 14px; line-height: 2; }
 
+  /* 用户管理视图 */
+  .role-tag { font-size: 12px; border-radius: 99px; padding: 2px 10px; white-space: nowrap; }
+  .role-tag.admin { background: #eef2ff; color: var(--primary); }
+  .role-tag.user { background: #f3f4f6; color: var(--text-muted); }
+  .role-tag.banned { background: #fef2f2; color: var(--danger); }
+  .user-ops { display: flex; gap: 6px; flex-wrap: wrap; }
+  .user-ops .btn { padding: 4px 10px; font-size: 12.5px; }
+
   .modal-mask { position: fixed; inset: 0; background: rgba(15,23,42,.45); display: none; align-items: center; justify-content: center; z-index: 100; }
   .modal-mask.open { display: flex; }
   .modal { background: #fff; border-radius: 16px; padding: 26px 30px; width: 400px; }
@@ -104,6 +112,7 @@
   <div class="view-switch" id="viewSwitch" style="display:none">
     <button id="vMine" class="active" onclick="setView('mine')">我的知识库</button>
     <button id="vAdmin" onclick="setView('admin')">平台管理</button>
+    <button id="vUsers" onclick="setView('users')">用户管理</button>
   </div>
   <span class="who" id="who"></span>
   <a href="/">← 返回问答</a>
@@ -148,6 +157,21 @@
     </table>
     <div class="empty" id="docEmpty" style="display:none">这个知识库还没有文档。</div>
   </div>
+
+  <!-- ===== 用户管理视图（仅 admin） ===== -->
+  <div id="userListView" style="display:none">
+    <div class="toolbar">
+      <div class="crumb">全部用户</div>
+      <div class="spacer"></div>
+    </div>
+    <table class="doc-table">
+      <thead><tr>
+        <th>用户名</th><th>角色</th><th>状态</th><th>注册时间</th><th></th>
+      </tr></thead>
+      <tbody id="userRows"></tbody>
+    </table>
+    <div class="empty" id="userEmpty" style="display:none">还没有用户。</div>
+  </div>
 </div>
 
 <!-- 新建/编辑知识库弹窗 -->
@@ -174,24 +198,52 @@
   </div>
 </div>
 
+<!-- 重置密码弹窗 -->
+<div class="modal-mask" id="pwdModal">
+  <div class="modal">
+    <h3 id="pwdModalTitle">重置密码</h3>
+    <label>新密码（至少 6 位）</label>
+    <input type="text" id="mNewPwd" maxlength="64" placeholder="输入新密码">
+    <div class="err" id="mPwdErr"></div>
+    <div class="foot">
+      <button class="btn" onclick="closePwdModal()">取消</button>
+      <button class="btn primary" onclick="submitResetPwd()">重置</button>
+    </div>
+  </div>
+</div>
+
 <script src="/common.js"></script>
 <script>
 'use strict';
 const $ = id => document.getElementById(id);
 
-let view = 'mine';               // mine | admin
+let view = 'mine';               // mine | admin | users
 let currentKb = null;            // 进入文档视图时的 kb 对象
 let editingKbId = null;          // 弹窗正在编辑的 kb（null = 新建）
 let pollTimer = null;             // 文档状态轮询句柄
+let resetPwdUid = null;           // 正在重置密码的用户 id
 
 // ===== 视图切换 =====
 function setView(v) {
   view = v;
   $('vMine').classList.toggle('active', v === 'mine');
   $('vAdmin').classList.toggle('active', v === 'admin');
-  $('listCrumb').textContent = v === 'admin' ? '平台全部知识库（管理员视图）' : '全部可见的知识库';
-  $('pageTitle').textContent = v === 'admin' ? '平台管理' : '知识库';
-  backToKbs();
+  $('vUsers').classList.toggle('active', v === 'users');
+  $('pageTitle').textContent = v === 'admin' ? '平台管理' : (v === 'users' ? '用户管理' : '知识库');
+  stopPolling();
+  currentKb = null;
+  $('docListView').style.display = 'none';
+  $('userListView').style.display = 'none';
+  if (v === 'users') {
+    // 用户管理：只对 admin 开放；非 admin 被后端 403 挡住，前端提前收敛
+    $('kbListView').style.display = 'none';
+    $('userListView').style.display = '';
+    loadUsers();
+  } else {
+    $('kbListView').style.display = '';
+    $('listCrumb').textContent = v === 'admin' ? '平台全部知识库（管理员视图）' : '全部可见的知识库';
+    backToKbs();
+  }
 }
 
 async function init() {
@@ -351,6 +403,7 @@ function backToKbs() {
   stopPolling();
   currentKb = null;
   $('docListView').style.display = 'none';
+  $('userListView').style.display = 'none';
   $('kbListView').style.display = '';
   loadKbs();
 }
@@ -470,6 +523,124 @@ function startPolling() {
 }
 function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+// ===== 用户管理（仅 admin） =====
+async function loadUsers() {
+  let data;
+  try {
+    data = await api('/admin/users');
+  } catch (e) {
+    $('userEmpty').style.display = ''; $('userEmpty').textContent = '加载失败：' + e.message;
+    return;
+  }
+  const users = data.users || [];
+  $('userEmpty').style.display = users.length ? 'none' : '';
+  const tbody = $('userRows');
+  tbody.textContent = '';
+  for (const u of users) tbody.appendChild(renderUserRow(u));
+}
+
+function renderUserRow(u) {
+  const tr = document.createElement('tr');
+
+  const tdName = document.createElement('td');
+  tdName.textContent = u.username;
+  if (u.username === getUsername()) {
+    const self = document.createElement('span');
+    self.className = 'role-tag';
+    self.textContent = '（我）';
+    tdName.appendChild(self);
+  }
+  tr.appendChild(tdName);
+
+  const tdRole = document.createElement('td');
+  const roleTag = document.createElement('span');
+  roleTag.className = 'role-tag ' + (u.role === 'admin' ? 'admin' : 'user');
+  roleTag.textContent = u.role === 'admin' ? '管理员' : '普通用户';
+  tdRole.appendChild(roleTag);
+  tr.appendChild(tdRole);
+
+  const tdStatus = document.createElement('td');
+  const stTag = document.createElement('span');
+  stTag.className = 'role-tag ' + (u.disabled ? 'banned' : 'user');
+  stTag.textContent = u.disabled ? '已禁用' : '正常';
+  tdStatus.appendChild(stTag);
+  tr.appendChild(tdStatus);
+
+  const tdTime = document.createElement('td');
+  tdTime.textContent = (u.created_at || '').replace('T', ' ').slice(0, 19);
+  tr.appendChild(tdTime);
+
+  const tdOps = document.createElement('td');
+  tdOps.className = 'user-ops';
+  const isSelf = u.username === getUsername();
+
+  // 升降级：自己不能改自己的角色（后端同样拦，前端只是提前禁用按钮）
+  const roleBtn = document.createElement('button');
+  roleBtn.className = 'btn';
+  roleBtn.textContent = u.role === 'admin' ? '取消管理员' : '设为管理员';
+  roleBtn.disabled = isSelf;
+  roleBtn.onclick = () => setUserRole(u.id, u.role === 'admin' ? 'user' : 'admin');
+  tdOps.appendChild(roleBtn);
+
+  // 重置密码
+  const pwdBtn = document.createElement('button');
+  pwdBtn.className = 'btn';
+  pwdBtn.textContent = '重置密码';
+  pwdBtn.onclick = () => openResetPwd(u.id, u.username);
+  tdOps.appendChild(pwdBtn);
+
+  // 禁用/解禁：自己不能禁用自己
+  const disBtn = document.createElement('button');
+  disBtn.className = 'btn danger-text';
+  disBtn.textContent = u.disabled ? '解禁' : '禁用';
+  disBtn.disabled = isSelf;
+  disBtn.onclick = () => toggleUserDisabled(u.id, !u.disabled);
+  tdOps.appendChild(disBtn);
+
+  tr.appendChild(tdOps);
+  return tr;
+}
+
+async function setUserRole(uid, role) {
+  const action = role === 'admin' ? '设为管理员' : '取消管理员';
+  if (!confirm('确定' + action + '该用户？')) return;
+  try {
+    await api('/admin/users/' + uid + '/role', { method: 'PATCH', json: { role } });
+    loadUsers();
+  } catch (e) { alert(e.message || '操作失败'); }
+}
+
+function openResetPwd(uid, username) {
+  resetPwdUid = uid;
+  $('pwdModalTitle').textContent = '重置密码：' + username;
+  $('mNewPwd').value = '';
+  $('mPwdErr').textContent = '';
+  $('pwdModal').classList.add('open');
+}
+
+function closePwdModal() {
+  $('pwdModal').classList.remove('open');
+  resetPwdUid = null;
+}
+
+async function submitResetPwd() {
+  const pwd = $('mNewPwd').value.trim();
+  if (pwd.length < 6) { $('mPwdErr').textContent = '新密码至少 6 位'; return; }
+  try {
+    await api('/admin/users/' + resetPwdUid + '/reset-password', { method: 'POST', json: { new_password: pwd } });
+    closePwdModal();
+    alert('密码已重置');
+  } catch (e) { $('mPwdErr').textContent = e.message || '重置失败'; }
+}
+
+async function toggleUserDisabled(uid, disabled) {
+  if (!confirm(disabled ? '禁用后该用户将无法登录，确定？' : '确定解禁该用户？')) return;
+  try {
+    await api('/admin/users/' + uid + '/disabled', { method: 'POST', json: { disabled } });
+    loadUsers();
+  } catch (e) { alert(e.message || '操作失败'); }
 }
 
 init();
