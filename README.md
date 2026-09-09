@@ -142,8 +142,8 @@
 
 ```bash
 # 1) 克隆
-git clone https://gitee.com/ren-youwen/Labor-Compliance-RAG.git
-cd Labor-Compliance-RAG
+git clone https://github.com/Ethon369/-Labor-Compliance-RAG-.git
+cd -Labor-Compliance-RAG-
 
 # 2) 配置（可选——离线模式可跳过）
 cp .env.example .env
