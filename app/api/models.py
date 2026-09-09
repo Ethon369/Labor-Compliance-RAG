@@ -134,3 +134,51 @@ class ResetPasswordRequest(BaseModel):
 class SetDisabledRequest(BaseModel):
     """管理员禁用/解禁账号。"""
     disabled: bool
+
+
+class CreateKbRequest(BaseModel):
+    """新建知识库。切分参数可选——不传就用 kb 列的默认值（与 splitter 常量同源）。"""
+    name: str = Field(..., min_length=1, max_length=64)
+    description: str = Field(default="", max_length=500)
+    is_public: bool = False
+    chunk_size: int | None = Field(default=None, ge=50, le=4000)
+    chunk_overlap: int | None = Field(default=None, ge=0, le=1000)
+
+
+class UpdateKbRequest(BaseModel):
+    """更新知识库：全部字段可选，只改传了的那些。"""
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    description: str | None = Field(default=None, max_length=500)
+    is_public: bool | None = None
+    chunk_size: int | None = Field(default=None, ge=50, le=4000)
+    chunk_overlap: int | None = Field(default=None, ge=0, le=1000)
+
+
+class KbBrief(BaseModel):
+    """知识库条目（列表/详情共用）。"""
+    id: int
+    name: str
+    description: str = ""
+    owner_id: int
+    owner_name: str = ""
+    is_public: bool = False
+    chunk_size: int
+    chunk_overlap: int
+    doc_count: int = 0
+    chunk_count: int = 0
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class DocumentBrief(BaseModel):
+    """文档条目：含处理状态，前端据此轮询与展示失败原因。"""
+    id: int
+    kb_id: int
+    title: str
+    source_type: str
+    status: str
+    error: str | None = None
+    file_size: int | None = None
+    chunk_count: int = 0
+    created_at: str = ""
+    updated_at: str = ""

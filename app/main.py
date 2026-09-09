@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.admin_routes import router as admin_router
 from app.api.auth import ensure_admin, ensure_user_schema, router as auth_router
+from app.api.kb_routes import router as kb_router
 from app.api.models import ErrorResponse
 from app.api.routes import router as chat_router
 from app.agent.graph import build_agent_from_config
@@ -60,9 +61,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 顺序：auth → admin → chat → kb，最后才挂静态目录。
+# StaticFiles 挂在最后是因为它匹配 "/" 前缀，放前面会把 /docs、/chat、/kb 全吃掉。
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(chat_router)
+app.include_router(kb_router)
 
 # 挂载静态前端：放在路由之后，避免抢占 /docs、/chat 等路径。
 # index.html 由 StaticFiles(html=True) 作为默认首页提供。

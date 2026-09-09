@@ -50,6 +50,24 @@ def require_admin(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
     return user
 
 
+def assert_kb_access(kb: dict | None, user: CurrentUser, write: bool = False) -> dict:
+    """知识库读/写权限判定（返回 kb 便于调用方接着用）。
+
+    抽出来是为了让"路径参数带 kb_id"的依赖和"只有 doc_id、要反查 kb"的文档端点
+    共用同一套语义，避免两处各判一遍、规则漂移。
+    """
+    if kb is None:
+        raise HTTPException(status_code=404, detail="知识库不存在或无权访问")
+    if user.is_admin or kb["owner_id"] == user.id:
+        return kb
+    if not write and kb["is_public"]:
+        return kb
+    # 私有库他人访问 → 404（不泄露存在性）；公开库他人写 → 403（资源可见，拒的是权限）
+    if kb["is_public"]:
+        raise HTTPException(status_code=403, detail="无权修改他人的知识库")
+    raise HTTPException(status_code=404, detail="知识库不存在或无权访问")
+
+
 def require_kb_access(write: bool = False):
     """依赖工厂：校验当前用户对路径参数 `kb_id` 指向的知识库的读/写权限。
 
@@ -62,15 +80,7 @@ def require_kb_access(write: bool = False):
             raise HTTPException(status_code=404, detail="知识库不存在或无权访问")
         settings = request.app.state.settings
         kb = fetch_kb(settings.database_url, int(raw))
-        if kb is None:
-            raise HTTPException(status_code=404, detail="知识库不存在或无权访问")
-        if user.is_admin or kb["owner_id"] == user.id:
-            return user
-        if not write and kb["is_public"]:
-            return user
-        # 私有库他人访问 → 404（不泄露存在性）；公开库他人写 → 403（资源可见，拒的是权限）
-        if kb["is_public"]:
-            raise HTTPException(status_code=403, detail="无权修改他人的知识库")
-        raise HTTPException(status_code=404, detail="知识库不存在或无权访问")
+        assert_kb_access(kb, user, write=write)
+        return user
 
     return dep
