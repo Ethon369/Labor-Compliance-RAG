@@ -5,8 +5,15 @@ import fetch_laws），跑 pytest 时把 scripts/ 提前塞进 sys.path 保持�
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
+
+# 测试永远走离线占位（hash embedding + term-overlap rerank）：环境变量优先于 .env，
+# 这里强制覆盖，防止本机 .env 配了 SILICONFLOW_API_KEY 后 pytest 意外调真 API
+# （慢、花钱、网络抖动还导致测试不稳定）。评测真实化是脚本/手动动作，不进测试。
+os.environ["EMBEDDING_MODE"] = "offline"
+os.environ["RERANK_MODE"] = "offline"
 
 import pytest
 

@@ -62,7 +62,7 @@
 
 ---
 
-## 项目阶段（V1 十步 + V2 升级，271 测试全绿）
+## 项目阶段（V1 十步 + V2 升级，266 passed + 5 conditionally-skipped）
 
 ### V1 · 单语料 RAG 内核（10 步，155 测试）
 
@@ -79,7 +79,7 @@
 | 9 | 前端 B-2 美化：浅灰侧边栏 + 白色消息区 + 引用中文名 | — | ✅ |
 | 10 | 认证与会话历史：登录/注册 + 持久化多轮会话（同名会话续问带上下文） | 12 | ✅ |
 
-### V2 · 从单语料 RAG 演进到多知识库平台（271 测试）
+### V2 · 从单语料 RAG 演进到多知识库平台（266 passed + 5 skipped）
 
 | 阶段 | 内容 | 测试数 | 状态 |
 |---|---|---|---|
@@ -88,7 +88,7 @@
 | V2.3 | 知识库管理全链路：文档解析（pdf/docx/txt/md）→ 递归切分 → 向量化 → 单事务落库 + CRUD/上传/轮询 API + 前端四件套（登录/知识库工作区/首页 KB 选择器） | 78 | ✅ |
 | V2.4 | 性能工程收口：连接池（测试耗时 21.6s→6.6s）、HNSW 索引、GZip/静态缓存、令牌桶限流、分页、X-Request-Id 观测、线程池、嵌入去重 | 14 | ✅ |
 
-**全量测试：`pytest tests/ -v` → 271 passed**
+**全量测试：`pytest tests/ -v` → 266 passed + 5 skipped（真模型库下离线检索断言自动跳过，见决策 19）**
 
 > 核心资产 100% 复用：RAG 内核（混合检索 + RRF + rerank + Agent + 评测框架）一行不动，
 > 只把"数据层"从固定法条换成可上传知识库、再加权限层——这是"单语料 RAG → 多知识库
@@ -96,18 +96,23 @@
 
 ---
 
-## 评测结果（阶段 3，50 问 · top-8，离线占位）
+## 评测结果（50 问 · top-8，真模型基线）
+
+> 默认评测已切换到**真模型**（硅基流动 bge-m3 embedding + bge-reranker-v2-m3）。
+> 需要真 key（`.env` 配 `SILICONFLOW_API_KEY` + `EMBEDDING_MODE/RERANK_MODE=siliconflow`）
+> 并重灌默认库向量后复跑；无 key 时回退离线占位（数字见决策 19 对比表）。
 
 | 方法 | Recall@8 | HitRate@8 |
 |---|---|---|
-| 纯向量 | 0.635 | 0.679 |
+| 纯向量 | 0.969 | 1.000 |
 | 纯BM25 | 0.789 | 0.830 |
-| 混合(RRF) | 0.742 | 0.793 |
-| **混合+rerank** | **0.815** | **0.849** |
+| 混合(RRF) | 0.928 | 0.962 |
+| **混合+rerank** | **0.965** | **0.981** |
 
-> 混合(RRF) < 纯BM25，但加 rerank 后全场最高——这是"召回 vs 排序"分离的教科书演示。
-> 原因：离线占位向量路带入噪音 → RRF 位置被噪音挤占 → rerank 按语义覆盖率把好条文
-> 从深水位拉回可见区。详见 [docs/decisions/04](docs/decisions/04-rerank与评测.md)。
+> 真模型下的核心结论：**语义向量把纯向量召回拉到 0.97（BM25 的 1.2 倍），RRF 融合
+> 两条互补的路（语义+词面）后 0.93，rerank 精排再提到 0.97 全场最高**。
+> 早期"混合 < 纯BM25"的结论是**离线占位向量的假象**（占位向量≈词面匹配、带噪），
+> 真模型下已不成立——对比细节见 [决策 19](docs/decisions/19-评测真实化.md)。
 
 复跑评测：`python eval/runner.py --top-k 8`
 
@@ -250,7 +255,7 @@ data/raw/               # 解析产物（git 提交）
 eval/                   # 评测
   questions.py / metrics.py / runner.py / compat.py
 
-tests/                  # 271 用例，离线可跑（DB 集成测试标 @pytest.mark.db）
+tests/                  # 266 用例 + 5 条件跳过，离线可跑（DB 集成测试标 @pytest.mark.db）
   test_fetch_laws.py / test_ingest.py / test_rag_offline.py / test_rag_db.py
   test_reranker.py / test_eval.py / test_agent.py / test_tools.py / test_api.py
   test_auth.py / test_admin.py / test_kb.py / test_kb_schema.py
@@ -267,7 +272,7 @@ Dockerfile / docker-compose.yml / .env.example / pyproject.toml / CLAUDE.md
 
 ---
 
-## 技术决策清单（18 篇，面试前必读）
+## 技术决策清单（19 篇，面试前必读）
 
 | # | 标题 | 核心决策 |
 |---|---|---|
@@ -289,6 +294,7 @@ Dockerfile / docker-compose.yml / .env.example / pyproject.toml / CLAUDE.md
 | 16 | [知识库CRUD与上传流水线](docs/decisions/16-知识库CRUD与上传流水线.md) | 上传只登记+后台任务，异常落 failed 不抛 |
 | 17 | [连接池与HNSW向量索引](docs/decisions/17-连接池与HNSW向量索引.md) | psycopg_pool 替换短连接 + HNSW 用 EXPLAIN 验证"当前不生效" |
 | 18 | [性能工程收口](docs/decisions/18-性能工程收口.md) | GZip/静态缓存/限流/分页/观测/线程池/嵌入去重 |
+| 19 | [评测真实化](docs/decisions/19-评测真实化.md) | 占位 vs 真 bge-m3 对比：纯向量 0.64→0.97，"混合<BM25"是占位假象 |
 
 ---
 

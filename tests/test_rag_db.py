@@ -39,10 +39,20 @@ def env():
     if store.chunk_signature([DEFAULT_KB_ID])[0] == 0:
         pytest.skip("默认库为空，先跑 python scripts/migrate_default_kb.py")
 
+    refs = store.all_chunks([DEFAULT_KB_ID])
     if store.count_embedded([DEFAULT_KB_ID]) == 0:  # 就地回填一次，让本模块自包含可跑
-        refs = store.all_chunks([DEFAULT_KB_ID])
         emb = HashEmbedder(s.embedding_dim)
         store.set_embeddings([(r.chunk_id, emb.embed_one(r.text)) for r in refs])
+    else:
+        # 模型一致性自检：hash-embed 库内首片文本，查 top-10 应命中自己。
+        # 命中 = 库向量是离线占位（hash）；未命中 = 库已被真 bge-m3 重灌——
+        # 此时 hash query 对 bge 库做词面断言没有意义（两个语义空间），跳过。
+        # 真模型库的检索验收见 eval/runner.py 的真实评测结果。
+        probe = refs[0]
+        probe_vec = HashEmbedder(s.embedding_dim).embed_one(probe.text)
+        probe_hits = {h.chunk_id for h in store.vector_topk(probe_vec, 10, [DEFAULT_KB_ID])}
+        if probe.chunk_id not in probe_hits:
+            pytest.skip("默认库向量非离线占位（已被真模型重灌），离线检索断言跳过")
 
     retriever = HybridRetriever(
         store=store, embedder=HashEmbedder(s.embedding_dim), candidate_k=20,
