@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识库管理 · 劳动合规 RAG</title>
+<style>
+  :root {
+    --sidebar-bg: #f2f3f5; --bg: #fff; --card: #fff;
+    --primary: #4f46e5; --primary-hover: #4338ca;
+    --text: #1e1b4b; --text-muted: #6b7280; --border: #e5e7eb;
+    --radius: 12px; --shadow: 0 1px 3px rgba(0,0,0,.08);
+    --danger: #dc2626; --ok: #16a34a; --warn: #d97706;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: var(--sidebar-bg); color: var(--text); min-height: 100vh;
+  }
+  .topbar {
+    background: var(--card); border-bottom: 1px solid var(--border);
+    padding: 14px 28px; display: flex; align-items: center; gap: 14px; position: sticky; top: 0; z-index: 10;
+  }
+  .topbar h1 { font-size: 18px; }
+  .topbar .who { margin-left: auto; font-size: 13px; color: var(--text-muted); }
+  .topbar a { color: var(--primary); font-size: 13px; text-decoration: none; }
+  .view-switch { display: flex; gap: 6px; }
+  .view-switch button {
+    border: 1px solid var(--border); background: #fff; color: var(--text-muted);
+    padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 13px;
+  }
+  .view-switch button.active { border-color: var(--primary); color: var(--primary); background: #eef2ff; }
+
+  .wrap { max-width: 980px; margin: 0 auto; padding: 28px 20px 60px; }
+
+  .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+  .toolbar .crumb { font-size: 15px; font-weight: 600; }
+  .toolbar .crumb .muted { color: var(--text-muted); font-weight: 400; }
+  .btn {
+    border: 1px solid var(--border); background: #fff; color: var(--text);
+    padding: 8px 16px; border-radius: 9px; cursor: pointer; font-size: 14px;
+    transition: border-color .15s;
+  }
+  .btn:hover { border-color: var(--primary); }
+  .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+  .btn.primary:hover { background: var(--primary-hover); }
+  .btn.danger-text { color: var(--danger); border-color: #fecaca; }
+  .btn.danger-text:hover { border-color: var(--danger); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .toolbar .spacer { flex: 1; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+  .kb-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 18px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px;
+  }
+  .kb-card .name { font-size: 15px; font-weight: 600; word-break: break-all; }
+  .kb-card .desc { font-size: 13px; color: var(--text-muted); min-height: 18px; word-break: break-all; }
+  .kb-card .meta { font-size: 12px; color: var(--text-muted); display: flex; gap: 10px; flex-wrap: wrap; }
+  .tag { font-size: 11px; border-radius: 99px; padding: 2px 9px; align-self: flex-start; }
+  .tag.pub { background: #ecfdf5; color: #047857; }
+  .tag.priv { background: #f3f4f6; color: var(--text-muted); }
+  .kb-card .ops { display: flex; gap: 8px; margin-top: 6px; }
+  .kb-card .ops .btn { padding: 5px 12px; font-size: 13px; }
+
+  .doc-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
+  .doc-table th, .doc-table td { padding: 11px 14px; text-align: left; font-size: 13.5px; border-bottom: 1px solid var(--border); }
+  .doc-table th { background: #f9fafb; color: var(--text-muted); font-weight: 500; }
+  .doc-table td.title { word-break: break-all; max-width: 260px; }
+  .status { font-size: 12px; border-radius: 99px; padding: 2px 10px; white-space: nowrap; }
+  .status.pending, .status.parsing, .status.embedding { background: #fffbeb; color: var(--warn); }
+  .status.ready { background: #ecfdf5; color: var(--ok); }
+  .status.failed { background: #fef2f2; color: var(--danger); cursor: help; }
+
+  .empty { text-align: center; color: var(--text-muted); padding: 60px 0; font-size: 14px; line-height: 2; }
+
+  .modal-mask { position: fixed; inset: 0; background: rgba(15,23,42,.45); display: none; align-items: center; justify-content: center; z-index: 100; }
+  .modal-mask.open { display: flex; }
+  .modal { background: #fff; border-radius: 16px; padding: 26px 30px; width: 400px; }
+  .modal h3 { font-size: 17px; margin-bottom: 16px; }
+  .modal label { display: block; font-size: 13px; color: var(--text-muted); margin: 10px 0 4px; }
+  .modal input[type=text], .modal input[type=number] {
+    width: 100%; border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px; font-size: 14px; outline: none;
+  }
+  .modal input:focus { border-color: var(--primary); }
+  .modal .row { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 14px; }
+  .modal .err { color: var(--danger); font-size: 13px; min-height: 18px; margin-top: 8px; }
+  .modal .foot { display: flex; gap: 10px; margin-top: 14px; justify-content: flex-end; }
+
+  #uploadArea {
+    border: 2px dashed var(--border); border-radius: 12px; padding: 22px;
+    text-align: center; color: var(--text-muted); font-size: 13.5px; margin-bottom: 18px;
+    background: #fff;
+  }
+  #uploadArea.has-file { border-color: var(--primary); color: var(--text); }
+  #uploadArea input { display: none; }
+  #uploadArea .pick { color: var(--primary); cursor: pointer; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1 id="pageTitle">知识库</h1>
+  <div class="view-switch" id="viewSwitch" style="display:none">
+    <button id="vMine" class="active" onclick="setView('mine')">我的知识库</button>
+    <button id="vAdmin" onclick="setView('admin')">平台管理</button>
+  </div>
+  <span class="who" id="who"></span>
+  <a href="/">← 返回问答</a>
+</div>
+
+<div class="wrap">
+  <!-- ===== 知识库列表视图 ===== -->
+  <div id="kbListView">
+    <div class="toolbar">
+      <div class="crumb" id="listCrumb">全部可见的知识库</div>
+      <div class="spacer"></div>
+      <button class="btn primary" onclick="openCreateKb()">＋ 新建知识库</button>
+    </div>
+    <div class="grid" id="kbGrid"></div>
+    <div class="empty" id="kbEmpty" style="display:none">
+      还没有知识库。<br>新建一个，或等待管理员把公开库开放出来。
+    </div>
+  </div>
+
+  <!-- ===== 文档列表视图 ===== -->
+  <div id="docListView" style="display:none">
+    <div class="toolbar">
+      <button class="btn" onclick="backToKbs()">← 返回</button>
+      <div class="crumb" id="docCrumb"></div>
+      <div class="spacer"></div>
+      <button class="btn" id="reindexBtn" onclick="reindexKb()">重建索引</button>
+    </div>
+
+    <div id="uploadArea">
+      <input type="file" id="fileInput" onchange="onFilePicked()">
+      <span class="pick" onclick="document.getElementById('fileInput').click()">选择文件</span>
+      上传到本知识库（pdf / docx / txt / md，≤ 10MB）。
+      上传后自动解析、切分并向量化，期间可以离开本页。
+      <div id="pickedName" style="margin-top:8px"></div>
+    </div>
+
+    <table class="doc-table">
+      <thead><tr>
+        <th>文档</th><th>类型</th><th>大小</th><th>状态</th><th>切片</th><th>上传时间</th><th></th>
+      </tr></thead>
+      <tbody id="docRows"></tbody>
+    </table>
+    <div class="empty" id="docEmpty" style="display:none">这个知识库还没有文档。</div>
+  </div>
+</div>
+
+<!-- 新建/编辑知识库弹窗 -->
+<div class="modal-mask" id="kbModal">
+  <div class="modal">
+    <h3 id="kbModalTitle">新建知识库</h3>
+    <label>名称</label>
+    <input type="text" id="mName" maxlength="64" placeholder="如：公司规章制度">
+    <label>描述（可选）</label>
+    <input type="text" id="mDesc" maxlength="500" placeholder="这个库存什么">
+    <label>切片长度（50-4000，默认 500）</label>
+    <input type="number" id="mSize" min="50" max="4000" placeholder="500">
+    <label>切片重叠（0-1000，默认 80）</label>
+    <input type="number" id="mOverlap" min="0" max="1000" placeholder="80">
+    <div class="row">
+      <input type="checkbox" id="mPublic">
+      <label for="mPublic" style="margin:0">公开（其他用户可见、可问答，仅你能管理）</label>
+    </div>
+    <div class="err" id="mErr"></div>
+    <div class="foot">
+      <button class="btn" onclick="closeKbModal()">取消</button>
+      <button class="btn primary" id="mSaveBtn" onclick="saveKbModal()">创建</button>
+    </div>
+  </div>
+</div>
+
+<script src="/common.js"></script>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+
+let view = 'mine';               // mine | admin
+let currentKb = null;            // 进入文档视图时的 kb 对象
+let editingKbId = null;          // 弹窗正在编辑的 kb（null = 新建）
+let pollTimer = null;             // 文档状态轮询句柄
+
+// ===== 视图切换 =====
+function setView(v) {
+  view = v;
+  $('vMine').classList.toggle('active', v === 'mine');
+  $('vAdmin').classList.toggle('active', v === 'admin');
+  $('listCrumb').textContent = v === 'admin' ? '平台全部知识库（管理员视图）' : '全部可见的知识库';
+  $('pageTitle').textContent = v === 'admin' ? '平台管理' : '知识库';
+  backToKbs();
+}
+
+async function init() {
+  if (!getToken()) { location.href = '/login.html'; return; }
+  $('who').textContent = '👤 ' + getUsername();
+  if (isAdmin()) $('viewSwitch').style.display = 'flex';
+
+  // ?view=admin 直达（非 admin 会被后端 /kb/admin/all 的 403 挡住，前端只是提前收敛）
+  const params = new URLSearchParams(location.search);
+  if (params.get('view') === 'admin' && isAdmin()) setView('admin');
+  await loadKbs();
+}
+
+// ===== 知识库列表 =====
+async function loadKbs() {
+  const path = view === 'admin' ? '/kb/admin/all' : '/kb';
+  let data;
+  try {
+    data = await api(path);
+  } catch (e) {
+    if (e.status === 403) { setView('mine'); return; }
+    $('kbEmpty').style.display = ''; $('kbEmpty').textContent = '加载失败：' + e.message;
+    return;
+  }
+  const kbs = data.kbs || [];
+  $('kbEmpty').style.display = kbs.length ? 'none' : '';
+  const grid = $('kbGrid');
+  grid.textContent = '';
+  for (const kb of kbs) grid.appendChild(renderKbCard(kb));
+}
+
+function renderKbCard(kb) {
+  const mine = kb.owner_id !== undefined && getUsername() && (kb.owner_name === getUsername() || isAdmin());
+  const card = document.createElement('div');
+  card.className = 'kb-card';
+
+  const name = document.createElement('div');
+  name.className = 'name';
+  name.textContent = kb.name;                       // 用户输入：只走 textContent
+  card.appendChild(name);
+
+  if (kb.description) {
+    const d = document.createElement('div');
+    d.className = 'desc';
+    d.textContent = kb.description;
+    card.appendChild(d);
+  }
+
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  const tag = document.createElement('span');
+  tag.className = 'tag ' + (kb.is_public ? 'pub' : 'priv');
+  tag.textContent = kb.is_public ? '公开' : '私有';
+  meta.appendChild(tag);
+  const stat = document.createElement('span');
+  stat.textContent = kb.doc_count + ' 个文档 · ' + kb.chunk_count + ' 片';
+  meta.appendChild(stat);
+  if (view === 'admin' && kb.owner_name) {
+    const owner = document.createElement('span');
+    owner.textContent = '所有者：' + kb.owner_name;
+    meta.appendChild(owner);
+  }
+  card.appendChild(meta);
+
+  const ops = document.createElement('div');
+  ops.className = 'ops';
+  const openBtn = document.createElement('button');
+  openBtn.className = 'btn';
+  openBtn.textContent = '管理文档';
+  openBtn.onclick = () => openDocs(kb);
+  ops.appendChild(openBtn);
+  // 新建/编辑只对 owner/admin 可用——与后端 require_kb_access(write) 同一语义
+  if (mine) {
+    const editBtn = document.createElement('button');
+    editBtn.className = 'btn';
+    editBtn.textContent = '编辑';
+    editBtn.onclick = () => openEditKb(kb);
+    ops.appendChild(editBtn);
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn danger-text';
+    delBtn.textContent = '删除';
+    delBtn.onclick = () => deleteKb(kb);
+    ops.appendChild(delBtn);
+  }
+  card.appendChild(ops);
+  return card;
+}
+
+// ===== 新建 / 编辑 / 删除知识库 =====
+function openCreateKb() {
+  editingKbId = null;
+  $('kbModalTitle').textContent = '新建知识库';
+  $('mSaveBtn').textContent = '创建';
+  $('mName').value = ''; $('mDesc').value = '';
+  $('mSize').value = ''; $('mOverlap').value = '';
+  $('mPublic').checked = false;
+  $('mErr').textContent = '';
+  $('kbModal').classList.add('open');
+}
+
+function openEditKb(kb) {
+  editingKbId = kb.id;
+  $('kbModalTitle').textContent = '编辑知识库';
+  $('mSaveBtn').textContent = '保存';
+  $('mName').value = kb.name; $('mDesc').value = kb.description || '';
+  $('mSize').value = kb.chunk_size; $('mOverlap').value = kb.chunk_overlap;
+  $('mPublic').checked = kb.is_public;
+  $('mErr').textContent = '';
+  $('kbModal').classList.add('open');
+}
+
+function closeKbModal() { $('kbModal').classList.remove('open'); }
+
+async function saveKbModal() {
+  const name = $('mName').value.trim();
+  if (!name) { $('mErr').textContent = '名称不能为空'; return; }
+  const json = { name, description: $('mDesc').value.trim(), is_public: $('mPublic').checked };
+  const size = parseInt($('mSize').value, 10);
+  const overlap = parseInt($('mOverlap').value, 10);
+  if ($('mSize').value) json.chunk_size = size;
+  if ($('mOverlap').value) json.chunk_overlap = overlap;
+
+  try {
+    if (editingKbId) await api('/kb/' + editingKbId, { method: 'PATCH', json });
+    else await api('/kb', { method: 'POST', json });
+    closeKbModal();
+    loadKbs();
+  } catch (e) {
+    $('mErr').textContent = e.message || '保存失败';
+  }
+}
+
+async function deleteKb(kb) {
+  if (!confirm('确定删除知识库「' + kb.name + '」？其下文档与切片会一起删除，历史会话保留。')) return;
+  try {
+    await api('/kb/' + kb.id, { method: 'DELETE' });
+    loadKbs();
+  } catch (e) { alert(e.message || '删除失败'); }
+}
+
+// ===== 文档视图 =====
+function openDocs(kb) {
+  currentKb = kb;
+  $('kbListView').style.display = 'none';
+  $('docListView').style.display = '';
+  const crumb = $('docCrumb');
+  crumb.textContent = '';
+  crumb.appendChild(document.createTextNode(kb.name + ' · 文档'));
+  const sub = document.createElement('span');
+  sub.className = 'muted';
+  sub.textContent = '（' + (kb.is_public ? '公开' : '私有') + '）';
+  crumb.appendChild(sub);
+  loadDocs();
+}
+
+function backToKbs() {
+  stopPolling();
+  currentKb = null;
+  $('docListView').style.display = 'none';
+  $('kbListView').style.display = '';
+  loadKbs();
+}
+
+async function loadDocs() {
+  if (!currentKb) return;
+  let data;
+  try {
+    data = await api('/kb/' + currentKb.id + '/documents');
+  } catch (e) { alert(e.message || '加载失败'); return; }
+  const docs = data.documents || [];
+  $('docEmpty').style.display = docs.length ? 'none' : '';
+
+  const tbody = $('docRows');
+  tbody.textContent = '';
+  for (const d of docs) tbody.appendChild(renderDocRow(d));
+
+  // 有非终态文档 → 轮询；全部到 ready/failed → 停
+  if (docs.some(d => d.status !== 'ready' && d.status !== 'failed')) startPolling();
+  else stopPolling();
+}
+
+function renderDocRow(d) {
+  const tr = document.createElement('tr');
+
+  const tdTitle = document.createElement('td');
+  tdTitle.className = 'title';
+  tdTitle.textContent = d.title;                     // 上传文件名是不可信输入：textContent
+  tr.appendChild(tdTitle);
+
+  const tdType = document.createElement('td');
+  tdType.textContent = (d.source_type || '').toUpperCase();
+  tr.appendChild(tdType);
+
+  const tdSize = document.createElement('td');
+  tdSize.textContent = d.file_size ? fmtSize(d.file_size) : '—';
+  tr.appendChild(tdSize);
+
+  const tdStatus = document.createElement('td');
+  const st = document.createElement('span');
+  st.className = 'status ' + d.status;
+  const statusText = { pending: '排队中', parsing: '解析中', embedding: '向量化中', ready: '已就绪', failed: '失败' };
+  st.textContent = statusText[d.status] || d.status;
+  if (d.status === 'failed' && d.error) st.title = d.error;   // 失败原因放 tooltip
+  tdStatus.appendChild(st);
+  tr.appendChild(tdStatus);
+
+  const tdCount = document.createElement('td');
+  tdCount.textContent = d.chunk_count || 0;
+  tr.appendChild(tdCount);
+
+  const tdTime = document.createElement('td');
+  tdTime.textContent = (d.created_at || '').replace('T', ' ').slice(0, 19);
+  tr.appendChild(tdTime);
+
+  const tdOps = document.createElement('td');
+  const delBtn = document.createElement('button');
+  delBtn.className = 'btn danger-text';
+  delBtn.textContent = '删除';
+  delBtn.onclick = () => deleteDoc(d);
+  tdOps.appendChild(delBtn);
+  tr.appendChild(tdOps);
+  return tr;
+}
+
+function fmtSize(n) {
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+  if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
+  return n + ' B';
+}
+
+// ===== 上传 =====
+function onFilePicked() {
+  const f = $('fileInput').files[0];
+  if (!f) return;
+  $('uploadArea').classList.add('has-file');
+  $('pickedName').textContent = '已选择：' + f.name + '（' + fmtSize(f.size) + '）';
+  uploadFile(f);
+}
+
+async function uploadFile(f) {
+  const form = new FormData();
+  form.append('file', f);
+  try {
+    const data = await api('/kb/' + currentKb.id + '/documents', { method: 'POST', form });
+    $('pickedName').textContent = '「' + f.name + '」已上传（id=' + data.id + '），正在后台处理…';
+    $('fileInput').value = '';
+    loadDocs();
+  } catch (e) {
+    $('pickedName').textContent = '上传失败：' + (e.message || '未知错误');
+    $('uploadArea').classList.remove('has-file');
+  }
+}
+
+// ===== 删除文档 / 重建索引 =====
+async function deleteDoc(d) {
+  if (!confirm('确定删除文档「' + d.title + '」及其全部切片？')) return;
+  try {
+    await api('/kb/documents/' + d.id, { method: 'DELETE' });
+    loadDocs();
+  } catch (e) { alert(e.message || '删除失败'); }
+}
+
+async function reindexKb() {
+  if (!currentKb) return;
+  if (!confirm('按已入库的切片内容重算全部向量？大库会花一会儿。')) return;
+  try {
+    await api('/kb/' + currentKb.id + '/reindex', { method: 'POST' });
+    alert('已提交后台重建，稍后刷新查看。');
+  } catch (e) { alert(e.message || '提交失败'); }
+}
+
+// ===== 轮询 =====
+function startPolling() {
+  stopPolling();
+  pollTimer = setInterval(loadDocs, 1500);
+}
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+init();
+</script>
+</body>
+</html>

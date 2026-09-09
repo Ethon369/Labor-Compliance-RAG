@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录 · 劳动合规 RAG</title>
+<style>
+  :root {
+    --primary: #4f46e5; --primary-hover: #4338ca;
+    --text: #1e1b4b; --text-muted: #6b7280; --border: #e5e7eb;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #f2f3f5; color: var(--text); min-height: 100vh;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .card {
+    background: #fff; border-radius: 18px; box-shadow: 0 4px 20px rgba(0,0,0,.06);
+    width: 380px; padding: 36px 36px 30px;
+  }
+  .logo { text-align: center; font-size: 40px; margin-bottom: 6px; }
+  h1 { text-align: center; font-size: 20px; margin-bottom: 4px; }
+  .sub { text-align: center; color: var(--text-muted); font-size: 13px; margin-bottom: 22px; }
+  .switch { display: flex; gap: 8px; margin-bottom: 18px; }
+  .switch button {
+    flex: 1; padding: 9px; border: 1px solid var(--border); background: #fff;
+    border-radius: 9px; cursor: pointer; font-size: 14px; color: var(--text-muted);
+  }
+  .switch button.active { border-color: var(--primary); color: var(--primary); background: #eef2ff; }
+  input {
+    width: 100%; border: 1px solid var(--border); border-radius: 10px;
+    padding: 11px 14px; font-size: 14px; margin-bottom: 10px; outline: none;
+  }
+  input:focus { border-color: var(--primary); }
+  .submit {
+    width: 100%; background: var(--primary); color: #fff; border: none; border-radius: 10px;
+    padding: 12px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 4px;
+  }
+  .submit:hover { background: var(--primary-hover); }
+  .err { color: #dc2626; font-size: 13px; min-height: 20px; margin-bottom: 6px; }
+  .ok { color: #16a34a; font-size: 13px; min-height: 20px; margin-bottom: 6px; }
+  .back { text-align: center; margin-top: 18px; }
+  .back a { color: var(--text-muted); font-size: 13px; text-decoration: none; }
+  .back a:hover { color: var(--primary); }
+  .hint { color: var(--text-muted); font-size: 12px; line-height: 1.6; margin-bottom: 14px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">⚖️</div>
+  <h1>劳动合规 RAG</h1>
+  <p class="sub">登录后可管理知识库并长期保存会话</p>
+
+  <div class="switch">
+    <button id="tabLogin" class="active" onclick="switchTab('login')">登录</button>
+    <button id="tabRegister" onclick="switchTab('register')">注册</button>
+    <button id="tabPassword" onclick="switchTab('password')">改密码</button>
+  </div>
+
+  <div class="err" id="msg"></div>
+  <div class="ok" id="okMsg"></div>
+
+  <input id="fUser" type="text" placeholder="用户名（2-32 位）" autocomplete="username">
+  <input id="fPass" type="password" placeholder="密码" autocomplete="current-password">
+  <input id="fPass2" type="password" placeholder="确认新密码（改密码时填）" style="display:none">
+  <button class="submit" id="submitBtn" onclick="submit()">登录</button>
+
+  <div class="hint" id="modeHint"></div>
+  <div class="back"><a href="/">← 返回问答页</a></div>
+</div>
+
+<script src="/common.js"></script>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+let mode = 'login';
+
+function switchTab(m) {
+  mode = m;
+  $('tabLogin').classList.toggle('active', m === 'login');
+  $('tabRegister').classList.toggle('active', m === 'register');
+  $('tabPassword').classList.toggle('active', m === 'password');
+  $('submitBtn').textContent = m === 'login' ? '登录' : (m === 'register' ? '注册' : '修改密码');
+  // 改密码多一个"确认新密码"框；登录/注册隐藏
+  $('fPass2').style.display = m === 'password' ? '' : 'none';
+  $('fPass').placeholder = m === 'password' ? '旧密码' : '密码';
+  $('fPass2').placeholder = m === 'password' ? '新密码（至少 6 位）' : '';
+  $('msg').textContent = '';
+  $('okMsg').textContent = '';
+  $('modeHint').textContent = m === 'password'
+    ? '改密码需要先登录（当前浏览器已有登录态即可）。'
+    : '';
+}
+
+async function submit() {
+  const username = $('fUser').value.trim();
+  const password = $('fPass').value;
+  const password2 = $('fPass2').value;
+  $('msg').textContent = ''; $('okMsg').textContent = '';
+
+  if (mode === 'password') {
+    if (!getToken()) { $('msg').textContent = '请先登录再修改密码'; return; }
+    if (!username || !password || !password2) { $('msg').textContent = '请填写完整'; return; }
+    if (password2.length < 6) { $('msg').textContent = '新密码至少 6 位'; return; }
+    if (password === password2) { $('msg').textContent = '新密码不能与旧密码相同'; return; }
+    try {
+      await api('/auth/change-password', {
+        method: 'POST',
+        json: { old_password: password, new_password: password2 },
+        no401: true,                      // 401 在这里给提示，不跳转（自己就是登录页）
+      });
+      $('okMsg').textContent = '密码已修改，下次登录请使用新密码';
+      $('fPass').value = ''; $('fPass2').value = '';
+    } catch (e) {
+      $('msg').textContent = e.status === 401 ? '登录已过期，请先重新登录' : (e.message || '修改失败');
+    }
+    return;
+  }
+
+  if (!username || !password) { $('msg').textContent = '请填写用户名和密码'; return; }
+  if (mode === 'register' && password.length < 4) { $('msg').textContent = '密码至少 4 位'; return; }
+
+  try {
+    const data = await api(mode === 'login' ? '/auth/login' : '/auth/register', {
+      method: 'POST', json: { username, password }, no401: true,
+    });
+    saveAuth(data);
+    location.href = '/';                      // 登录/注册成功直接回问答页
+  } catch (e) {
+    $('msg').textContent = e.message || '请求失败';
+  }
+}
+
+// 从 index 跳来时支持 ?tab=password 直达改密码
+const params = new URLSearchParams(location.search);
+if (params.get('tab') === 'password') switchTab('password');
+</script>
+</body>
+</html>

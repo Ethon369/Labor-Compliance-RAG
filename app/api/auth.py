@@ -284,14 +284,19 @@ def save_session_message(dsn: str, session_id: int, role: str, content: str, cit
 
 
 def list_user_sessions(dsn: str, user_id: int, limit: int = 50) -> list[dict]:
-    """该用户最近 limit 个会话（倒序，最新更新在前）。"""
+    """该用户最近 limit 个会话（倒序，最新更新在前）。
+
+    带 kb_id：前端打开历史会话时按它把 header 的知识库选择器同步成会话绑定的库，
+    避免出现"看的是 A 库的历史、下一问却发到 B 库"的错位。
+    """
     with psycopg.connect(dsn) as conn:
         rows = conn.execute(
-            "SELECT id, title, updated_at FROM chat_sessions WHERE user_id = %s "
+            "SELECT id, title, updated_at, kb_id FROM chat_sessions WHERE user_id = %s "
             "ORDER BY updated_at DESC LIMIT %s",
             (user_id, limit),
         ).fetchall()
-    return [{"id": r[0], "title": r[1], "updated_at": r[2].isoformat()} for r in rows]
+    return [{"id": r[0], "title": r[1], "updated_at": r[2].isoformat(),
+             "kb_id": r[3]} for r in rows]
 
 
 def load_session_messages(dsn: str, session_id: int, user_id: int | None = None) -> list[dict]:

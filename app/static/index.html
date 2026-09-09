@@ -84,9 +84,17 @@
     padding: 14px 24px; display: flex; align-items: center; gap: 10px; z-index: 10;
   }
   .header h1 { font-size: 18px; font-weight: 600; }
+  .header .kb-pick {
+    margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted);
+  }
+  .header .kb-pick select {
+    border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px;
+    font-size: 13px; color: var(--text); background: #fff; outline: none; max-width: 200px;
+  }
+  .header .kb-pick select:focus { border-color: var(--primary); }
   .header .badge {
     font-size: 11px; background: #eef2ff; color: var(--primary);
-    padding: 3px 10px; border-radius: 99px; margin-left: auto;
+    padding: 3px 10px; border-radius: 99px;
   }
 
   .chat-area {
@@ -207,6 +215,10 @@
 <div class="main">
   <header class="header">
     <h1>新对话</h1>
+    <div class="kb-pick" id="kbPick" style="display:none">
+      知识库
+      <select id="kbSelect" onchange="onKbChange()" style="display:none"></select>
+    </div>
     <span class="badge">RAG · 检索增强生成</span>
   </header>
 
@@ -249,6 +261,7 @@
   </div>
 </div>
 
+<script src="/common.js"></script>
 <script>
 // ===== DOM 引用 =====
 const chatArea = document.getElementById('chatArea');
@@ -268,12 +281,41 @@ let currentSessionId = null;     // 登录用户当前会话 id；null = 尚未�
 let guestHistory = [];           // 游客本页多轮上下文 [{role, content}]（关页即没）
 let currentUsername = null;      // 当前登录用户名（用于气泡标签）
 let lastQuestion = '';           // 最近一次提问（finishDone 记录游客上下文用）
+let currentKbId = null;          // 当前选择的知识库 id；null = 全部可见库（后端默认）
 
-// ===== token 管理（存 localStorage：刷新页面不丢登录态）=====
-function getToken() { return localStorage.getItem('lcr_token') || ''; }
-function getUsername() { return localStorage.getItem('lcr_username') || ''; }
-function getRole() { return localStorage.getItem('lcr_role') || 'user'; }
-function isAdmin() { return getRole() === 'admin'; }
+// token/角色/escapeHTML 等公共工具由 common.js 提供（与 login/kb 页共用同一份）
+
+// ===== 知识库选择器（仅登录用户显示；游客固定用默认库）=====
+async function loadKbs() {
+  const sel = document.getElementById('kbSelect');
+  const pick = document.getElementById('kbPick');
+  if (!getToken()) { pick.style.display = 'none'; return; }
+  try {
+    const data = await api('/kb', { no401: true });
+    const kbs = data.kbs || [];
+    sel.textContent = '';
+    const allOpt = document.createElement('option');
+    allOpt.value = '';
+    allOpt.textContent = '全部可见知识库';
+    sel.appendChild(allOpt);
+    for (const kb of kbs) {
+      const opt = document.createElement('option');
+      opt.value = String(kb.id);
+      opt.textContent = kb.name + (kb.is_public ? '（公开）' : '');
+      sel.appendChild(opt);
+    }
+    sel.value = currentKbId ? String(currentKbId) : '';
+    sel.style.display = '';
+    pick.style.display = '';
+  } catch (e) { /* 401/网络异常：静默，游客路径不受影响 */ }
+}
+
+/** 换库 = 换语境：旧会话绑定的库不会跟着变，直接开新对话最不容易误会 */
+function onKbChange() {
+  const v = document.getElementById('kbSelect').value;
+  currentKbId = v ? Number(v) : null;
+  if (currentSessionId) newChat();
+}
 
 // ===== 登录 / 注册 =====
 function openAuth() {
@@ -321,10 +363,12 @@ async function submitAuth() {
     localStorage.setItem('lcr_role', data.role || 'user');
     currentUsername = data.username;
     currentSessionId = null;
+    currentKbId = null;
     closeAuth();
     renderAuthArea();
     newChat();
     loadSessions();
+    loadKbs();
   } catch (e) {
     errEl.textContent = '网络错误：' + e.message;
   }
@@ -336,7 +380,9 @@ function logout() {
   localStorage.removeItem('lcr_role');
   currentUsername = null;
   currentSessionId = null;
+  currentKbId = null;
   guestHistory = [];
+  document.getElementById('kbPick').style.display = 'none';
   renderAuthArea();
   newChat();
   renderHistoryEmpty();
@@ -347,9 +393,12 @@ function renderAuthArea() {
   if (username) {
     authArea.innerHTML = `
       <div class="auth-user">
-        <span>👤 ${escapeHTML(username)}</span>
+        <span>👤 ${escapeHTML(username)}${isAdmin() ? ' · 管理员' : ''}</span>
         <span class="logout-btn" onclick="logout()">登出</span>
-      </div>`;
+      </div>
+      <button class="auth-btn" onclick="location.href='/kb.html'">📚 我的知识库</button>
+      ${isAdmin() ? `<button class="auth-btn" onclick="location.href='/kb.html?view=admin'">🛠 平台管理</button>` : ''}
+      <button class="auth-btn" onclick="location.href='/login.html?tab=password'">🔑 修改密码</button>`;
   } else {
     authArea.innerHTML = `<button class="auth-btn" onclick="openAuth()">登录 / 注册</button>`;
   }
@@ -358,7 +407,7 @@ function renderAuthArea() {
 // 页面加载时恢复登录态
 currentUsername = getUsername();
 renderAuthArea();
-if (getToken()) loadSessions();
+if (getToken()) { loadSessions(); loadKbs(); }
 
 // ===== 侧边栏：登录用户 = 会话列表；游客 = 提示 =====
 function renderHistoryEmpty() {
@@ -388,14 +437,15 @@ async function loadSessions() {
       if (s.id === currentSessionId) div.classList.add('active');
       div.textContent = s.title || '新对话';
       div.title = s.title;
-      div.onclick = () => openSession(s.id);
+      div.onclick = () => openSession(s);
       historyList.appendChild(div);
     }
   } catch (e) { /* 网络异常 */ }
 }
 
-/** 点开某会话：拉取全部多轮消息并渲染到消息区 */
-async function openSession(sessionId) {
+/** 点开某会话：拉取全部多轮消息并渲染到消息区（s 带 kb_id，用于同步选择器） */
+async function openSession(session) {
+  const sessionId = session.id;
   if (!getToken()) return;
   try {
     const resp = await fetch(`/chat/sessions/${sessionId}/messages`, {
@@ -404,6 +454,12 @@ async function openSession(sessionId) {
     if (!resp.ok) return;
     const data = await resp.json();
     currentSessionId = sessionId;
+    // 会话绑定的库优先：把 header 选择器同步过去，避免"下一问问到别的库"的错位
+    if (session.kb_id) {
+      currentKbId = session.kb_id;
+      const sel = document.getElementById('kbSelect');
+      if (sel && sel.style.display !== 'none') sel.value = String(session.kb_id);
+    }
     renderMsgs(data.messages || []);
     loadSessions();
   } catch (e) { /* 网络异常 */ }
@@ -571,6 +627,7 @@ async function fetchSSE(question) {
     if (getToken()) {
       headers.Authorization = 'Bearer ' + getToken();
       body.session_id = currentSessionId;
+      if (currentKbId) body.kb_id = currentKbId;
     } else {
       body.history = guestHistory;
     }
