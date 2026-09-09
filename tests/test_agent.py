@@ -19,6 +19,11 @@ from app.agent.protocol import (
     LLMRewriter,
     PassThroughRewriter,
     _call_chat,
+    _call_chat_stream,
+    _call_chat_with_tools_stream,
+    answer_sink_get,
+    answer_sink_reset,
+    answer_sink_set,
 )
 from app.agent.state import AgentAnswer
 from app.agent.verify import CitationVerifier
@@ -200,6 +205,143 @@ def test_llm_answerer_handles_empty_hits():
     assert result == expected
 
 
+# ---- 流式回答单测（stream:true + SSE 逐 data 行解析）----
+
+
+def _fake_sse_response(chunks: list[dict]) -> io.BytesIO:
+    """构造一个 OpenAI 兼容的流式响应体：若干行 `data: <json>` 之间空行隔开。"""
+    body = "".join(
+        f"data: {json.dumps(c, ensure_ascii=False)}\n\n" for c in chunks
+    ) + "data: [DONE]\n\n"
+    return io.BytesIO(body.encode("utf-8"))
+
+
+def test_call_chat_stream_parses_deltas_and_callbacks():
+    """_call_chat_stream 应逐 delta 调 on_token 并拼回完整文本。"""
+    chunks = [
+        {"choices": [{"delta": {"content": "根据"}}]},
+        {"choices": [{"delta": {"content": "劳动法第44条"}}]},
+        {"choices": [{"delta": {}}]},  # 空增量/usage 帧应跳过
+        {"choices": [{"delta": {"content": "支付150%"}}]},
+    ]
+    collected: list[str] = []
+    with patch("urllib.request.urlopen", return_value=_fake_sse_response(chunks)):
+        text = _call_chat_stream("http://fake/v1/chat/completions", "sk-fake", "m",
+                                 [{"role": "user", "content": "q"}],
+                                 on_token=collected.append)
+    assert text == "根据劳动法第44条支付150%"
+    assert collected == ["根据", "劳动法第44条", "支付150%"]
+
+
+def test_llm_answerer_streams_when_on_token_given():
+    """给 on_token 时应走流式请求并回调每个增量，返回值仍是完整答案。"""
+    chunks = [{"choices": [{"delta": {"content": p}}]} for p in ["加班费", "不低于", "150%"]]
+    collected: list[str] = []
+    with patch("urllib.request.urlopen", return_value=_fake_sse_response(chunks)):
+        ans = LLMAnswerer(api_key="sk-test")
+        result = ans.generate("加班费怎么算", [OVERTIME], on_token=collected.append)
+    assert result == "加班费不低于150%"
+    assert collected == ["加班费", "不低于", "150%"]
+
+
+def test_answer_sink_default_none_and_roundtrip():
+    """answer_sink 默认 None；注入后能读到、reset 后还原（路由在请求线程里用）。"""
+    assert answer_sink_get() is None
+    got = []
+    tok = answer_sink_set(got.append)
+    assert answer_sink_get() == got.append
+    answer_sink_reset(tok)
+    assert answer_sink_get() is None
+
+
+class StubToolRegistry:
+    """最小工具注册器：record 调用，回一个可序列化 dict。"""
+
+    def __init__(self):
+        self.calls: list[tuple[str, dict]] = []
+
+    def tool_schemas(self):
+        return [{"type": "function", "function": {"name": "calc", "parameters": {}}}]
+
+    def call(self, name: str, args: dict):
+        self.calls.append((name, args))
+        return {"value": 3000}
+
+
+def test_tool_calling_stream_runs_tool_then_streams_final_text():
+    """流式工具循环：首轮只有 tool_calls（无 content），应执行工具；次轮 content 逐段回调。"""
+    # 首轮：tool_call 的 id/name/arguments 拆成多个 chunk 到达（模拟真实网络拆分）
+    tool_deltas = [
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "call_1", "type": "function",
+             "function": {"name": "calc", "arguments": ""}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": '{"month":'}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": ' 3}'}}]}}]},
+        {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+    ]
+    # 次轮：纯文本增量（最终回答）
+    text_deltas = [{"choices": [{"delta": {"content": p}}]} for p in ["计算结果：", "3000元"]]
+    bodies = [_fake_sse_response(tool_deltas), _fake_sse_response(text_deltas)]
+    call_no = {"n": 0}
+
+    def fake_urlopen(_req, *_a, **_k):
+        body = bodies[min(call_no["n"], len(bodies) - 1)]
+        call_no["n"] += 1
+        return body
+
+    registry = StubToolRegistry()
+    messages = [{"role": "user", "content": "算一下经济补偿"}]
+    collected: list[str] = []
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        text = _call_chat_with_tools_stream(
+            "http://fake/v1/chat/completions", "sk-fake", "m",
+            messages, registry.tool_schemas(), registry,
+            on_token=collected.append,
+        )
+    assert registry.calls == [("calc", {"month": 3})]
+    assert collected == ["计算结果：", "3000元"]
+    assert text == "计算结果：3000元"
+    # assistant(tool_calls) 与 tool 两条消息都进了上下文，闭环成立
+    assert any(m["role"] == "tool" and m["tool_call_id"] == "call_1" for m in messages)
+    assert any(m["role"] == "assistant" and m.get("tool_calls") for m in messages)
+
+
+# ---- answer 节点把流式接收器传给 answerer 的接线测试 ----
+
+
+class StreamingFakeAnswerer:
+    """带 on_token 的回答器：把文本拆成若干片段逐段回调（模拟真 LLM 流式）。"""
+
+    def __init__(self):
+        self.pieces = ["片段A", "片段B", "片段C"]
+        self.on_token_given = None
+
+    def generate(self, query: str, hits: list[FusedHit], history: list[dict] | None = None,
+                 on_token=None) -> str:
+        self.on_token_given = on_token
+        if on_token:
+            for p in self.pieces:
+                on_token(p)
+        return "".join(self.pieces)
+
+
+def test_graph_streams_answer_tokens_via_sink():
+    """路由注入 answer_sink 后，answer 节点应把接收器传给 answerer，token 被逐段收集。"""
+    answerer = StreamingFakeAnswerer()
+    app = build_agent(FakeRetriever([OVERTIME]), answerer=answerer, verify_mode="pass")
+    collected: list[str] = []
+    tok = answer_sink_set(collected.append)
+    try:
+        result = app.invoke({"original": "加班费怎么算"})
+    finally:
+        answer_sink_reset(tok)
+    assert result["answer"].answer == "片段A片段B片段C"
+    assert answerer.on_token_given == collected.append
+    assert collected == ["片段A", "片段B", "片段C"]
+
+
 # ---- LLM 注入 Graph 端到端（mock） ----
 
 
@@ -222,7 +364,9 @@ class FakeAnswerer:
         self.called_with: list[tuple[str, list[FusedHit], list[dict]]] = []
         self.return_value = return_value
 
-    def generate(self, query: str, hits: list[FusedHit], history: list[dict] | None = None) -> str:
+    def generate(self, query: str, hits: list[FusedHit], history: list[dict] | None = None,
+                 on_token=None) -> str:
+        # on_token：对齐回答器统一接口（answer 节点恒传此 kwarg），测试用假实现不产生流式文本
         self.called_with.append((query, hits, history or []))
         return self.return_value
 

@@ -13,7 +13,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agent.protocol import AnswerGenerator, QueryRewriter, RetrievalProtocol
+from app.agent.protocol import (
+    AnswerGenerator,
+    QueryRewriter,
+    RetrievalProtocol,
+    answer_sink_get,
+)
 from app.agent.state import AgentAnswer, Citation
 from app.agent.verify import CitationVerifier
 
@@ -70,11 +75,16 @@ def make_answer_node(answerer: AnswerGenerator):
             Citation(law_id=h.law_id, article_no=h.article_no, chapter=h.chapter, text=h.text)
             for h in hits
         ]
+        # 路由层在流式请求时通过 answer_sink 注入 token 接收器（见 protocol.answer_sink_*）。
+        # answerer 生成期间逐段回调它；离线/测试没有接收器则为 None，走一次性整段生成。
         return {
             "answer": AgentAnswer(
                 refuse=False,
                 rewritten=state["rewritten"],
-                answer=answerer.generate(state["rewritten"], hits, state.get("history")),
+                answer=answerer.generate(
+                    state["rewritten"], hits, state.get("history"),
+                    on_token=answer_sink_get(),
+                ),
                 citations=citations,
             )
         }

@@ -35,7 +35,9 @@ class SseChunk(BaseModel):
     - rewriting  → 正在改写查询
     - searching  → 正在检索
     - verifying  → 正在核验引用
-    - answering  → 正在生成回答（LLM 流式逐段到达时用此 stage）
+    - token      → LLM 回答文本的一段增量：客户端应把连续 token 累积成完整回答
+                  （打字机效果的数据帧；回答流式期间没有 answering 帧）
+    - answering  → 无 LLM（离线模板瞬时整段生成）时的过渡提示，回答不逐 token 推
     - refusing   → 命中不足，正在生成拒答
     - done       → 全部完成，content 为最终答案文本，citations 带引用列表
     - error      → 异常，content 为错误描述

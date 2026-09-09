@@ -14,9 +14,35 @@ from __future__ import annotations
 
 import json
 import urllib.request
-from typing import Any, Protocol
+from contextvars import ContextVar
+from typing import Any, Callable, Iterator, Protocol
 
 from app.rag.models import FusedHit, RetrievalResult
+
+# ---- 回答流式输出的"下游接收器" ----
+
+# Graph 的 invoke 是同步阻塞调用，回答文本在 answer 节点内部才产生，外部拿不到中间状态。
+# 要让浏览器看到"打字机"式逐段回答，需要一根在生成过程中把每段文本递出去的通道。
+# 用 ContextVar 存"接收器"而不是塞进 AgentState：状态里只放数据，不放回调（见 state.py 哲学）；
+# 每个请求各自跑在自己的线程里，contextvar 天然隔离并发，互不串扰。
+_answer_sink: ContextVar[Callable[[str], None] | None] = ContextVar(
+    "answer_token_sink", default=None
+)
+
+
+def answer_sink_get() -> Callable[[str], None] | None:
+    """answer 节点读取当前线程的 token 接收器（无流式需求时为 None）。"""
+    return _answer_sink.get()
+
+
+def answer_sink_set(sink: Callable[[str], None]) -> Any:
+    """路由层在跑 invoke 前注入接收器，返回 reset token 供事后还原。"""
+    return _answer_sink.set(sink)
+
+
+def answer_sink_reset(token: Any) -> None:
+    _answer_sink.reset(token)
+
 
 # ---- 能力协议 ----
 
@@ -36,8 +62,18 @@ class AnswerGenerator(Protocol):
     """回答生成能力：依据命中的条文生成带引用的答案。真产品里是 LLM。
 
     history：可选的多轮对话上下文（[{role, content}, ...]，role ∈ user/assistant），
-    供回答器参考前文组织"承接式"回答；离线实现可忽略。"""
-    def generate(self, query: str, hits: list[FusedHit], history: list[dict] | None = None) -> str: ...
+    供回答器参考前文组织"承接式"回答；离线实现可忽略。
+    on_token：可选的回调——回答文本逐段到达时触发（浏览器"打字机"效果的数据源）。
+    实现应把"整段生成"拆成可回调的片段：LLM 实现每收到一个流式 delta 调一次，
+    离线模板实现不产生片段、忽略此参数。路由层通过 answer_sink_* 把它注入到 answer 节点。
+    """
+    def generate(
+        self,
+        query: str,
+        hits: list[FusedHit],
+        history: list[dict] | None = None,
+        on_token: Callable[[str], None] | None = None,
+    ) -> str: ...
 
 
 # ---- 离线默认实现（零 key 可跑） ----
@@ -54,8 +90,15 @@ class TemplateAnswerer:
     """离线默认回答：确定性模板拼条文，不产生引用断言之外的结论（无幻觉）。
 
     真接 LLM 后这里换成开放式回答；模板句刻意"机械"，只服务两件事——让端到端测试
-    能断言"答案引用了 top 条文"，以及演示时结果可预测。history 对模板无意义，忽略。"""
-    def generate(self, query: str, hits: list[FusedHit], history: list[dict] | None = None) -> str:
+    能断言"答案引用了 top 条文"，以及演示时结果可预测。history 对模板无意义，忽略。
+    on_token：模板是瞬时拼装、没有逐段输出过程，保留参数仅为对齐回答器统一接口。"""
+    def generate(
+        self,
+        query: str,
+        hits: list[FusedHit],
+        history: list[dict] | None = None,
+        on_token: Callable[[str], None] | None = None,
+    ) -> str:
         if not hits:
             return "未检索到可引用的法律条文。"
         lines = [f"《{h.law_id}》第{h.article_no}条：{h.text}" for h in hits]
@@ -96,6 +139,66 @@ def _call_chat(
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         payload = json.loads(resp.read().decode("utf-8"))
     return payload["choices"][0]["message"]["content"]
+
+
+def _iter_sse_chunks(resp: Any) -> Iterator[dict]:
+    """解析 OpenAI 兼容接口的 stream:true 响应：一行一条 data: <json>。
+
+    urlopen 返回的文件对象按行迭代，忽略非 data 行；遇到结束哨兵 [DONE] 停止。
+    """
+    for raw in resp:
+        line = raw.decode("utf-8").strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[len("data:"):].strip()
+        if not data or data == "[DONE]":
+            continue
+        yield json.loads(data)
+
+
+def _call_chat_stream(
+    endpoint: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, str]],
+    temperature: float = 0.0,
+    timeout: int = 60,
+    on_token: Callable[[str], None] | None = None,
+) -> str:
+    """流式版 _call_chat：请求带 stream:true，逐 delta 回调 on_token，最后拼成完整文本。
+
+    为什么单独再写一个：_call_chat 面向改写这种"要一个完整结果就够"的调用，
+    此处面向回答——回答要的是把文本增量边到边递给前端。增量即 content 字段本身，
+    前端拼起来就是完整回答（决策 07 记的 v2 目标：逐 token yield）。
+    """
+    body = json.dumps({
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "stream": True,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        endpoint,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    parts: list[str] = []
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        for chunk in _iter_sse_chunks(resp):
+            choices = chunk.get("choices") or []
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
+            content = delta.get("content")
+            if content:
+                parts.append(content)
+                if on_token:
+                    on_token(content)
+    return "".join(parts)
 
 
 _REWRITE_SYSTEM = (
@@ -165,7 +268,7 @@ class LLMAnswerer:
         self._endpoint = f"{base_url.rstrip('/')}/chat/completions"
         self._temperature = temperature
 
-    def generate(self, query: str, hits: list[FusedHit], history: list[dict] | None = None) -> str:
+    def _build_messages(self, query, hits, history) -> list[dict[str, str]]:
         article_lines: list[str] = []
         for h in hits:
             article_lines.append(f"《{h.law_id}》第{h.article_no}条：{h.text}")
@@ -177,10 +280,30 @@ class LLMAnswerer:
             if h.get("role") in ("user", "assistant") and h.get("content"):
                 messages.append({"role": h["role"], "content": h["content"]})
         messages.append({"role": "user", "content": _ANSWER_USER_TPL.format(query=query, articles=articles)})
-        return _call_chat(
-            self._endpoint, self._api_key, self._model,
-            messages, self._temperature,
-        ).strip()
+        return messages
+
+    def generate(
+        self,
+        query: str,
+        hits: list[FusedHit],
+        history: list[dict] | None = None,
+        on_token: Callable[[str], None] | None = None,
+    ) -> str:
+        messages = self._build_messages(query, hits, history)
+        # 有接收器才走流式：逐 delta 回调 on_token，结束时拼回完整文本（供落库/done 帧）。
+        # 没接收器（测试/离线/改写场景）走一次性 _call_chat，少一路网络开销。
+        if on_token is not None:
+            text = _call_chat_stream(
+                self._endpoint, self._api_key, self._model,
+                messages, self._temperature,
+                on_token=on_token,
+            )
+        else:
+            text = _call_chat(
+                self._endpoint, self._api_key, self._model,
+                messages, self._temperature,
+            )
+        return text.strip()
 
 
 # ---- LLM 实现（带 function calling 工具调用循环） ----
@@ -281,6 +404,101 @@ def _call_chat_with_tools(
     return "无法完成计算，请重新描述您的问题。"
 
 
+def _call_chat_with_tools_stream(
+    endpoint: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    tool_caller: Any,
+    temperature: float = 0.0,
+    max_rounds: int = 5,
+    timeout: int = 60,
+    on_token: Callable[[str], None] | None = None,
+) -> str:
+    """流式版 _call_chat_with_tools：同一套 function calling 循环，但每轮请求 stream:true。
+
+    为什么两种工具循环并存：同步版是"拿完整结果"路径（测试/无流式需求复用）；
+    这版要处理两类流式 delta——文本 content 立即回调 on_token（打字机数据源），
+    tool_calls 则跨 chunk 拼接、凑齐后执行工具再进下一轮。工具调用本身不可见，
+    用户只感知"停顿一下，接着继续打字"。
+    """
+    for _round in range(max_rounds):
+        body = json.dumps({
+            "model": model,
+            "messages": messages,
+            "tools": tools,
+            "temperature": temperature,
+            "stream": True,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            endpoint,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        collected: list[str] = []  # 本轮最终文本增量（一般只在无工具的最终轮出现）
+        tool_calls: dict[int, dict[str, str]] = {}  # index → 跨 chunk 拼好的 tool_call
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            for chunk in _iter_sse_chunks(resp):
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                delta = choices[0].get("delta") or {}
+                if delta.get("content"):
+                    collected.append(delta["content"])
+                    if on_token:
+                        on_token(delta["content"])
+                # function calling 的参数名/参数内容可能被拆进多个 chunk，须按 index 累积
+                for tc in delta.get("tool_calls") or []:
+                    slot = tool_calls.setdefault(tc.get("index", 0), {"id": "", "name": "", "arguments": ""})
+                    if tc.get("id"):
+                        slot["id"] += tc["id"]
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        slot["name"] += fn["name"]
+                    if fn.get("arguments"):
+                        slot["arguments"] += fn["arguments"]
+
+        # 本轮要求调工具：把拼好的 assistant 消息（含 tool_calls）记入历史后执行
+        if tool_calls:
+            full_calls = [
+                {"id": s["id"], "type": "function",
+                 "function": {"name": s["name"], "arguments": s["arguments"]}}
+                for s in tool_calls.values()
+            ]
+            messages.append({
+                "role": "assistant",
+                "content": "".join(collected) or None,
+                "tool_calls": full_calls,
+            })
+            for tc in full_calls:
+                fn_name = tc["function"]["name"]
+                try:
+                    result = tool_caller.call(fn_name, json.loads(tc["function"]["arguments"]))
+                    result_str = (json.dumps(result.model_dump(), ensure_ascii=False)
+                                  if hasattr(result, "model_dump") else json.dumps(result, ensure_ascii=False))
+                except KeyError:
+                    result_str = json.dumps({"error": f"工具 '{fn_name}' 未注册"}, ensure_ascii=False)
+                except Exception as exc:
+                    result_str = json.dumps({"error": str(exc)}, ensure_ascii=False)
+                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result_str})
+            continue
+
+        # 无工具调用：本轮文本即最终回答
+        return "".join(collected).strip()
+
+    # max_rounds 耗尽兜底（同同步版）
+    for msg in reversed(messages):
+        if msg.get("role") == "assistant" and msg.get("content"):
+            return msg["content"].strip()
+    return "无法完成计算，请重新描述您的问题。"
+
+
 class ToolCallingAnswerer:
     """带 function calling 的 LLM 回答器：LLM 判断需要工具时自动调用，结果反馈后继续生成回答。
 
@@ -306,7 +524,13 @@ class ToolCallingAnswerer:
         self._temperature = temperature
         self._max_rounds = max_rounds
 
-    def generate(self, query: str, hits: list[FusedHit], history: list[dict] | None = None) -> str:
+    def generate(
+        self,
+        query: str,
+        hits: list[FusedHit],
+        history: list[dict] | None = None,
+        on_token: Callable[[str], None] | None = None,
+    ) -> str:
         article_lines: list[str] = []
         for h in hits:
             article_lines.append(f"《{h.law_id}》第{h.article_no}条：{h.text}")
@@ -317,9 +541,11 @@ class ToolCallingAnswerer:
             if h.get("role") in ("user", "assistant") and h.get("content"):
                 messages.append({"role": h["role"], "content": h["content"]})
         messages.append({"role": "user", "content": _ANSWER_USER_TPL.format(query=query, articles=articles)})
-        return _call_chat_with_tools(
+        runner = _call_chat_with_tools_stream if on_token is not None else _call_chat_with_tools
+        return runner(
             self._endpoint, self._api_key, self._model,
             messages, self._tools_registry.tool_schemas(),
             self._tools_registry,
             self._temperature, self._max_rounds,
+            **({"on_token": on_token} if on_token is not None else {}),
         )

@@ -3,16 +3,16 @@
 SSE 设计（与 WebSocket 对比见决策 07）：
 - 单向推送（server→client），客户端只需 fetch + ReadableStream 即可接收
 - 每条事件是一行 data: <json>\n\n，stage 字段让客户端知道当前在哪个阶段
-- 最终帧 stage="done"，附带完整答案 + 引用列表
-
-为什么不直接用 LangGraph 的 astream_events：本项目回答不是 LLM 流式生成（v1 是
-一次 LLM 调用拿到全文），SSE 主要展示"阶段进度"——改写→检索→核验→回答→完成——而非
-逐 token 推送。真正的逐 token 流式 v2 再做（见决策 07 取舍）。
+- 回答文本不是整段收尾：LLM 生成期间逐 token 推 stage="token"（打字机效果），
+  前端边收边渲染；最终帧 stage="done" 携带完整答案 + 引用列表（供落库/历史/收尾）
+- 阶段进度帧（rewriting→searching→verifying）先于回答推，让用户在等待时看到"走到哪一步"
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 import traceback
 from typing import AsyncIterator
 
@@ -35,6 +35,7 @@ from app.api.auth import (
     save_chat_history,
     save_session_message,
 )
+from app.agent.protocol import answer_sink_reset, answer_sink_set
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -53,30 +54,74 @@ def _sse_frame(data: dict) -> str:
 
 async def _stream_chat(app, question: str, history: list[dict], session_id: int | None = None,
                        settings=None, uid: int | None = None) -> AsyncIterator[str]:
-    """SSE 流式生成器：逐阶段推送进度事件，最后推送 done 帧。
+    """SSE 流式生成器：进度帧 + 逐 token 回答帧 + done 收尾帧。
 
-    为什么不用 async for 在节点间插桩：当前 Graph compile 后 invoke 是同步的，
-    流式推送是在单个线程内"发帧→执行一步→发帧"模拟的。v2 换成 astream_events
-    可实现真正的逐节点 yield。见决策 07。
+    为什么"跑图"要放后台线程 + asyncio.Queue 桥接：Graph compile 后 invoke 是同步阻塞，
+    直接在本 async 生成器里调用会把事件循环堵死，前端收到的帧会"攒到结尾一次性到达"。
+    于是把完整链路丢进一个守护线程去跑；回答器每产出一段文本就回调 on_token，
+    on_token 用 call_soon_threadsafe 把片段跨线程投进 asyncio.Queue；本生成器 await
+    queue.get() 逐段取出、逐段 yield——既真逐 token 打字机，事件循环也一直空闲。
+    （LangGraph astream_events 逐节点事件留待后续，见决策 07 取舍。）
     """
     try:
-        # 阶段 1：改写
+        # 阶段 1-3：改写/检索/核验的"进度提示"。这些步骤短，先发帧占位；
+        # 耗时在 answer 节点的 LLM 上，那里才需要真正的逐 token 推送。
         yield _sse_frame(SseChunk(stage="rewriting", content="正在理解您的问题..."))
-        # 阶段 2：检索
         yield _sse_frame(SseChunk(stage="searching", content="正在检索相关法律条文..."))
-        # 阶段 3：核验
         yield _sse_frame(SseChunk(stage="verifying", content="正在核验条文与问题的相关性..."))
 
-        # 执行全链路——所有阶段在 invoke 内部完成，SSE 只发"进度提示"
-        result = app.invoke({"original": question, "history": history})
-        answer = result["answer"]
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def on_token(text: str) -> None:
+            # 后台线程里被回答器回调 → 线程安全地把文本片段投给主事件循环消费
+            loop.call_soon_threadsafe(queue.put_nowait, ("token", text))
+
+        def run_graph() -> None:
+            """守护线程：注入 token 接收器后同步跑完整链路，把片段/结果投进队列。"""
+            ctx = answer_sink_set(on_token)  # answer 节点据此拿到本请求的接收器
+            try:
+                result = app.invoke({"original": question, "history": history})
+                answer = result["answer"]
+            except Exception as exc:
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", str(exc)))
+                return
+            finally:
+                answer_sink_reset(ctx)
+            # 关键顺序：token 都在 invoke 期间投递，result 一定在最后 → 队列天然有序
+            loop.call_soon_threadsafe(queue.put_nowait, ("result", answer))
+
+        threading.Thread(target=run_graph, daemon=True).start()
+
+        # 消费队列：逐 token 推给前端；遇错误/最终结果进入收尾
+        answer = None
+        streamed = False  # 是否推过 token 帧（区分离线模板的"瞬时整段"与真流式）
+        while True:
+            kind, payload = await queue.get()
+            if kind == "token":
+                streamed = True
+                yield _sse_frame(SseChunk(stage="token", content=payload))
+            elif kind == "error":
+                yield _sse_frame(SseChunk(
+                    stage="error",
+                    content=json.dumps(
+                        ErrorResponse(error="处理请求时出错", detail=payload).model_dump(),
+                        ensure_ascii=False,
+                    ),
+                ))
+                return
+            else:  # "result"
+                answer = payload
+                break
 
         if answer.refuse:
             yield _sse_frame(SseChunk(stage="refusing", content="检索到的条文不足以支持明确结论"))
-        else:
+        elif not streamed:
+            # 无 token 流（离线模板瞬时整段生成）：补一个过渡帧收尾进度条；
+            # 有 token 流时前端已经边收边渲染，不需要它。
             yield _sse_frame(SseChunk(stage="answering", content="正在整理回答..."))
 
-        # 完成帧：携带最终答案 + 引用 + 会话 id
+        # 完成帧：携带最终答案 + 引用 + 会话 id（前端据此收尾、落历史、挂引用）
         citations = [
             CitationBrief(
                 law_id=c.law_id,

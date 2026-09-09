@@ -248,5 +248,45 @@ def test_get_chat_no_params():
     assert resp.status_code == 404
 
 
+# ---- 流式回答集成：token 帧逐段到达，done 帧收尾 ----
+
+class StreamingFakeAnswerer:
+    """带 on_token 的回答器：把回答拆成片段逐段回调（模拟 LLM 逐 token 到达）。"""
+
+    def __init__(self, pieces=None):
+        self.pieces = pieces or ["根据", "《劳动法》第44条", "，应支付", "不低于150%的报酬。"]
+
+    def generate(self, query, hits, history=None, on_token=None):
+        for p in self.pieces:
+            if on_token:
+                on_token(p)
+        return "".join(self.pieces)
+
+
+def test_chat_sse_streams_token_frames_then_done():
+    """注入流式回答器后：回答以 token 帧逐段推送，拼起来=done 帧完整答案。"""
+    with TestClient(fastapi_app) as client:
+        fastapi_app.state.agent = build_agent(
+            FakeRetriever([OVERTIME_HIT]),
+            answerer=StreamingFakeAnswerer(),
+            verify_mode="pass",
+        )
+        fastapi_app.state.history = []
+        resp = client.post("/chat", json={"question": "延长工作时间 加班费 工资报酬"})
+
+    assert resp.status_code == 200
+    frames = _parse_sse_frames(resp.text)
+    stages = [f["stage"] for f in frames]
+    token_texts = [f["content"] for f in frames if f["stage"] == "token"]
+    assert len(token_texts) > 0
+    assert stages[0] == "rewriting"
+    assert stages[-1] == "done"
+    assert "answering" not in stages  # 真流式走 token 帧，不需要"正在整理"过渡帧
+
+    done_payload = json.loads(frames[-1]["content"])
+    assert "".join(token_texts) == done_payload["answer"]  # 前端拼的=权威完整答案
+    assert len(done_payload["citations"]) == 1
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

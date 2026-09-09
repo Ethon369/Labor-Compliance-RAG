@@ -251,6 +251,8 @@ const authBtn   = document.getElementById('authBtn');
 const authArea  = document.getElementById('authArea');
 
 let currentProgressMsg = null;   // 当前进度消息 DOM（用于更新文本）
+let streamBubble = null;         // 流式回答的助手气泡 DOM（token 逐段累积进去）
+let streamText = '';             // 流式回答已收到文本（done 前不断累加）
 let currentMode = 'login';       // 弹窗当前 tab
 let currentSessionId = null;     // 登录用户当前会话 id；null = 尚未建会话（提问时自动建）
 let guestHistory = [];           // 游客本页多轮上下文 [{role, content}]（关页即没）
@@ -456,6 +458,9 @@ function send(e) {
 
   addBubble('user', currentUsername || '您', question);
 
+  // 新请求开始：清空上一轮的流式渲染状态，先展示"正在理解"进度气泡
+  streamBubble = null;
+  streamText = '';
   currentProgressMsg = addBubble('progress', '⚖️ 助手', '正在理解您的问题...');
   setSending(true);
 
@@ -544,6 +549,9 @@ function handleFrame(frame) {
     case 'refusing':
       updateProgress(frame.content || stageMap.refusing);
       break;
+    case 'token':
+      streamToken(frame.content);
+      break;
     case 'done':
       finishDone(frame);
       break;
@@ -560,7 +568,22 @@ function updateProgress(text) {
   }
 }
 
-/** done 帧：移除进度消息，显示最终回答 + 引用 */
+/**
+ * token 帧：LLM 回答的一段增量 → 打字机式累积进助手气泡。
+ * 首个 token 到达意味着"进度阶段结束、回答开始"，把进度气泡升级成正式回答气泡。
+ * 用 textContent 赋值（不拼 innerHTML），天然转义 LLM 输出里的 < > &，防注入。
+ */
+function streamToken(text) {
+  if (currentProgressMsg) { currentProgressMsg.remove(); currentProgressMsg = null; }
+  if (!streamBubble) {
+    streamBubble = addBubble('assistant', '⚖️ 助手', '');
+  }
+  streamText += text;
+  streamBubble.querySelector('.bubble').textContent = streamText;
+  chatArea.scrollTop = chatArea.scrollHeight;
+}
+
+/** done 帧：收尾回答——若流式渲染过则复用该气泡，否则新建；挂引用、记历史 */
 function finishDone(frame) {
   if (currentProgressMsg) { currentProgressMsg.remove(); currentProgressMsg = null; }
   setSending(false);
@@ -568,6 +591,9 @@ function finishDone(frame) {
   let payload;
   try { payload = JSON.parse(frame.content); }
   catch (e) {
+    // done 帧不是合法 JSON（不应发生）：丢弃半成品流式气泡，降级为普通气泡展示原文
+    if (streamBubble) { streamBubble.remove(); streamBubble = null; }
+    streamText = '';
     addBubble('assistant', '⚖️ 助手', frame.content || '（空回答）');
     return;
   }
@@ -584,17 +610,30 @@ function finishDone(frame) {
   }
 
   if (payload.refuse) {
+    // 拒答不产生 token 流，正常不应有半成品气泡；稳妥起见仍清理
+    if (streamBubble) { streamBubble.remove(); streamBubble = null; }
+    streamText = '';
     addBubble('assistant', '⚖️ 助手', payload.answer || '抱歉，无法就该问题给出明确结论。');
     return;
   }
 
-  const div = addBubble('assistant', '⚖️ 助手', payload.answer || '（空回答）');
+  // 有流式气泡 → 复用，把服务端权威的完整答案写回（覆盖可能的半句/尾随字符），再挂引用
+  let div = streamBubble;
+  if (!div) {
+    div = addBubble('assistant', '⚖️ 助手', payload.answer || '（空回答）');
+  } else {
+    div.querySelector('.bubble').textContent = payload.answer || '（空回答）';
+  }
+  streamBubble = null;
+  streamText = '';
   attachCitations(div, payload.citations || []);
 }
 
-/** error 帧：移除进度消息，显示错误 */
+/** error 帧：移除进度消息与半成品流式气泡，显示错误 */
 function finishError(frame) {
   if (currentProgressMsg) { currentProgressMsg.remove(); currentProgressMsg = null; }
+  if (streamBubble) { streamBubble.remove(); streamBubble = null; }
+  streamText = '';
   setSending(false);
 
   let detail = frame.content || '未知错误';
