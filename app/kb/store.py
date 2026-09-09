@@ -8,7 +8,7 @@ SQL 一律参数绑定；返回给上层的是纯数据（dict/list），不暴�
 """
 from __future__ import annotations
 
-import psycopg
+from app.core.db import pool_conn
 
 from app.kb.schema import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE, DEFAULT_KB_ID
 from app.rag.vectorstore import format_vector
@@ -19,7 +19,7 @@ _KB_UPDATABLE = ("name", "description", "is_public", "chunk_size", "chunk_overla
 
 def fetch_kb(dsn: str, kb_id: int) -> dict | None:
     """取一个知识库的基本信息；不存在返回 None。"""
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         row = conn.execute(
             "SELECT id, name, description, owner_id, is_public, chunk_size, chunk_overlap, "
             "doc_count, chunk_count, created_at FROM kb WHERE id = %s",
@@ -38,7 +38,7 @@ def visible_kb_ids(dsn: str, uid: int | None) -> list[int]:
     uid=None（游客）只给公开库。为什么用一条 JOIN 而不是先查角色再分支：
     少一次往返，且"admin 看全部"这条规则与其它条件同处一个 WHERE，不会漏改。
     """
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         if uid is None:
             rows = conn.execute("SELECT id FROM kb WHERE is_public ORDER BY id").fetchall()
         else:
@@ -75,7 +75,7 @@ def create_kb(dsn: str, owner_id: int, name: str, description: str = "",
               chunk_size: int = DEFAULT_CHUNK_SIZE,
               chunk_overlap: int = DEFAULT_CHUNK_OVERLAP) -> int:
     """建库，返回 kb_id。切分参数随库存储（不同语料适合的片长不同，见 schema 注释）。"""
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         row = conn.execute(
             "INSERT INTO kb (name, description, owner_id, is_public, chunk_size, chunk_overlap)"
             " VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
@@ -95,7 +95,7 @@ def update_kb(dsn: str, kb_id: int, **fields) -> bool:
     # 列名来自 _KB_UPDATABLE 常量（非用户输入），值全部走 %s
     set_sql = ", ".join(f"{c} = %s" for c in cols)
     params = [fields[c] for c in cols] + [kb_id]
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         cur = conn.execute(
             f"UPDATE kb SET {set_sql}, updated_at = now() WHERE id = %s", params
         )
@@ -104,7 +104,7 @@ def update_kb(dsn: str, kb_id: int, **fields) -> bool:
 
 def delete_kb(dsn: str, kb_id: int) -> bool:
     """删库。documents/chunks 靠 ON DELETE CASCADE 一起清；历史会话的 kb_id 置 NULL。"""
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         cur = conn.execute("DELETE FROM kb WHERE id = %s", (kb_id,))
         return cur.rowcount > 0
 
@@ -127,7 +127,7 @@ def list_kbs(dsn: str, uid: int | None = None, page: int = 1,
                 " LEFT JOIN users v ON v.id = %s")
         where = "WHERE (v.role = 'admin' OR k.owner_id = %s OR k.is_public)"
         params = [uid, uid]
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         total = conn.execute(f"SELECT count(*) {base} {where}", params).fetchone()[0]
         rows = conn.execute(
             "SELECT k.id, k.name, k.description, k.owner_id, k.is_public,"
@@ -158,7 +158,7 @@ def create_document(dsn: str, kb_id: int, title: str, source_type: str,
 
     先插行再交给后台任务：客户端立刻拿到 doc_id 可轮询，不必等解析+向量化走完。
     """
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         row = conn.execute(
             "INSERT INTO documents (kb_id, title, source_type, file_size, source_law_id)"
             " VALUES (%s, %s, %s, %s, %s) RETURNING id",
@@ -176,14 +176,14 @@ def set_document_status(dsn: str, doc_id: int, status: str, error: str | None = 
         sets.append("chunk_count = %s")
         params.append(chunk_count)
     params.append(doc_id)
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         conn.execute(
             f"UPDATE documents SET {', '.join(sets)} WHERE id = %s", params
         )
 
 
 def get_document(dsn: str, doc_id: int) -> dict | None:
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         row = conn.execute(
             "SELECT id, kb_id, title, source_type, source_law_id, file_size, status,"
             " error, chunk_count, created_at, updated_at FROM documents WHERE id = %s",
@@ -196,7 +196,7 @@ def list_documents(dsn: str, kb_id: int, page: int = 1,
                    page_size: int = 20) -> tuple[list[dict], int]:
     page = max(page, 1)
     page_size = min(max(page_size, 1), 100)
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         total = conn.execute(
             "SELECT count(*) FROM documents WHERE kb_id = %s", (kb_id,)
         ).fetchone()[0]
@@ -218,7 +218,7 @@ def _doc_row(r) -> dict:
 
 def delete_document(dsn: str, doc_id: int) -> bool:
     """删文档（chunks 级联删）并同步所属库的计数。返回是否命中。"""
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         row = conn.execute(
             "SELECT kb_id FROM documents WHERE id = %s", (doc_id,)
         ).fetchone()
@@ -244,7 +244,7 @@ def replace_chunks(dsn: str, kb_id: int, doc_id: int, chunks: list[dict],
     embeddings 与 chunks 等长时一并写入；不传则整篇标记待回填（embedding=NULL），
     由 backfill 脚本补。传了向量就没有"写了内容但还没向量"的中间窗口。
     """
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         if chunks:
             max_seq = max(int(c["seq"]) for c in chunks)
             conn.execute(

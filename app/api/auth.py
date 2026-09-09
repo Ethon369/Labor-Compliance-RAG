@@ -14,7 +14,7 @@ import json
 import secrets
 import time
 
-import psycopg
+from app.core.db import pool_conn
 from fastapi import APIRouter, HTTPException, Request
 
 from app.api.models import AuthRequest, AuthResponse, ChangePasswordRequest, MeResponse
@@ -84,7 +84,7 @@ def _bearer_user_id(request: Request, secret: str) -> int | None:
 
 def ensure_user_schema(dsn: str) -> None:
     """建 users / chat_history 两张表；CREATE IF NOT EXISTS，可反复调用。"""
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -142,7 +142,7 @@ def ensure_admin(dsn: str, username: str, password: str) -> int:
 
     依赖 users.role 列已存在——调用前须先跑 ensure_user_schema + ensure_kb_schema。
     """
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         row = conn.execute(
             "SELECT id, role FROM users WHERE username = %s", (username,)
         ).fetchone()
@@ -161,7 +161,7 @@ def ensure_admin(dsn: str, username: str, password: str) -> int:
 
 def get_user(dsn: str, uid: int) -> dict | None:
     """按 id 取用户（含角色与禁用状态），不存在返回 None。"""
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         row = conn.execute(
             "SELECT id, username, role, disabled, created_at FROM users WHERE id = %s", (uid,)
         ).fetchone()
@@ -173,7 +173,7 @@ def get_user(dsn: str, uid: int) -> dict | None:
 
 def change_password(dsn: str, uid: int, old_password: str, new_password: str) -> bool:
     """校验旧密码后更新为新密码；旧密码不对返回 False（不区分"用户不存在"）。"""
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         row = conn.execute("SELECT password_hash FROM users WHERE id = %s", (uid,)).fetchone()
         if row is None or not verify_password(old_password, row[0]):
             return False
@@ -186,7 +186,7 @@ def change_password(dsn: str, uid: int, old_password: str, new_password: str) ->
 
 def list_users(dsn: str, limit: int, offset: int) -> tuple[list[dict], int]:
     """分页列出用户（新注册的在前）。返回 (records, total)。"""
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         total = conn.execute("SELECT count(*) FROM users").fetchone()[0]
         rows = conn.execute(
             "SELECT id, username, role, disabled, created_at FROM users "
@@ -202,14 +202,14 @@ def list_users(dsn: str, limit: int, offset: int) -> tuple[list[dict], int]:
 
 def set_role(dsn: str, uid: int, role: str) -> bool:
     """改角色；用户不存在返回 False。"""
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         cur = conn.execute("UPDATE users SET role = %s WHERE id = %s", (role, uid))
         return cur.rowcount > 0
 
 
 def reset_password(dsn: str, uid: int, new_password: str) -> bool:
     """管理员重置密码（不需要旧密码）；用户不存在返回 False。"""
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         cur = conn.execute(
             "UPDATE users SET password_hash = %s WHERE id = %s",
             (hash_password(new_password), uid),
@@ -219,14 +219,14 @@ def reset_password(dsn: str, uid: int, new_password: str) -> bool:
 
 def set_disabled(dsn: str, uid: int, disabled: bool) -> bool:
     """禁用/解禁账号；用户不存在返回 False。"""
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         cur = conn.execute("UPDATE users SET disabled = %s WHERE id = %s", (disabled, uid))
         return cur.rowcount > 0
 
 
 def save_chat_history(dsn: str, user_id: int, question: str, answer: str, citations: list[dict]) -> None:
     """登录用户的一条问答落库。citations 存 JSON 文本，读取时再解析。"""
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         conn.execute(
             "INSERT INTO chat_history (user_id, question, answer, citations) VALUES (%s, %s, %s, %s)",
             (user_id, question, answer, json.dumps(citations, ensure_ascii=False)),
@@ -235,7 +235,7 @@ def save_chat_history(dsn: str, user_id: int, question: str, answer: str, citati
 
 def load_user_history(dsn: str, user_id: int, limit: int) -> tuple[list[dict], int]:
     """该用户最近 limit 条问答（倒序，最新在前）。返回 (records, total)。"""
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         total = conn.execute(
             "SELECT count(*) FROM chat_history WHERE user_id = %s", (user_id,)
         ).fetchone()[0]
@@ -256,7 +256,7 @@ def load_user_history(dsn: str, user_id: int, limit: int) -> tuple[list[dict], i
 def create_session(dsn: str, user_id: int, title: str = "新对话",
                    kb_id: int | None = None) -> int:
     """创建会话，返回 session_id。kb_id 记下这个会话问答时检索哪个知识库。"""
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         row = conn.execute(
             "INSERT INTO chat_sessions (user_id, title, kb_id) VALUES (%s, %s, %s) RETURNING id",
             (user_id, title, kb_id),
@@ -266,7 +266,7 @@ def create_session(dsn: str, user_id: int, title: str = "新对话",
 
 def session_kb_id(dsn: str, session_id: int) -> int | None:
     """读会话绑定的知识库（可能为 NULL——库被删或从未绑定）。"""
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         row = conn.execute(
             "SELECT kb_id FROM chat_sessions WHERE id = %s", (session_id,)
         ).fetchone()
@@ -275,7 +275,7 @@ def session_kb_id(dsn: str, session_id: int) -> int | None:
 
 def save_session_message(dsn: str, session_id: int, role: str, content: str, citations: list[dict] | None = None) -> None:
     """在指定会话中保存一条消息，并更新会话 updated_at。"""
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         conn.execute(
             "INSERT INTO chat_messages (session_id, role, content, citations) VALUES (%s, %s, %s, %s)",
             (session_id, role, content, json.dumps(citations or [], ensure_ascii=False)),
@@ -289,7 +289,7 @@ def list_user_sessions(dsn: str, user_id: int, limit: int = 50) -> list[dict]:
     带 kb_id：前端打开历史会话时按它把 header 的知识库选择器同步成会话绑定的库，
     避免出现"看的是 A 库的历史、下一问却发到 B 库"的错位。
     """
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         rows = conn.execute(
             "SELECT id, title, updated_at, kb_id FROM chat_sessions WHERE user_id = %s "
             "ORDER BY updated_at DESC LIMIT %s",
@@ -301,7 +301,7 @@ def list_user_sessions(dsn: str, user_id: int, limit: int = 50) -> list[dict]:
 
 def load_session_messages(dsn: str, session_id: int, user_id: int | None = None) -> list[dict]:
     """读取某会话的全部消息；若提供 user_id 则做拥有权校验。"""
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         if user_id is not None:
             owner = conn.execute(
                 "SELECT user_id FROM chat_sessions WHERE id = %s", (session_id,)
@@ -325,7 +325,7 @@ def load_session_messages(dsn: str, session_id: int, user_id: int | None = None)
 async def register(req: AuthRequest, request: Request):
     """注册：用户名查重 → 哈希入库 → 直接返回 token（免二次登录）。新用户恒为普通用户。"""
     settings = request.app.state.settings
-    with psycopg.connect(settings.database_url) as conn:
+    with pool_conn(settings.database_url) as conn:
         dup = conn.execute("SELECT 1 FROM users WHERE username = %s", (req.username,)).fetchone()
         if dup:
             raise HTTPException(status_code=409, detail="用户名已存在")
@@ -345,7 +345,7 @@ async def login(req: AuthRequest, request: Request):
     密码错与账号被禁用都返回 401 同一句话——不暴露"这个账号存在但被禁了"，
     否则等于给攻击者一个枚举有效用户名的信号。"""
     settings = request.app.state.settings
-    with psycopg.connect(settings.database_url) as conn:
+    with pool_conn(settings.database_url) as conn:
         row = conn.execute(
             "SELECT id, password_hash, role, disabled FROM users WHERE username = %s",
             (req.username,),

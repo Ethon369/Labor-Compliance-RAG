@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 
-import psycopg
+from app.core.db import pool_conn
 
 from app.rag.models import ChunkRef, LaneHit
 
@@ -30,7 +30,7 @@ class PgVectorStore:
 
     def ensure_ready(self) -> None:
         """幂等迁移：启 pgvector 扩展、给 chunks 加 embedding 列。可反复调用。"""
-        with psycopg.connect(self._dsn) as conn:
+        with pool_conn(self._dsn) as conn:
             conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
             conn.execute(
                 f"ALTER TABLE chunks ADD COLUMN IF NOT EXISTS {_DIM_ALTER_SQL.format(dim=self._dim)}"
@@ -38,7 +38,7 @@ class PgVectorStore:
 
     def all_chunks(self, kb_ids: list[int]) -> list[ChunkRef]:
         """拉指定知识库的全量切片，供 BM25 建内存倒排。排序固定，保证索引顺序一致。"""
-        with psycopg.connect(self._dsn) as conn:
+        with pool_conn(self._dsn) as conn:
             rows = conn.execute(
                 """
                 SELECT c.id, c.kb_id, c.doc_id, d.title, c.seq, c.page, c.heading,
@@ -62,7 +62,7 @@ class PgVectorStore:
         同文档重传（seq 相同、内容变、id 不变）→ documents.updated_at 变。
         三条写路径全覆盖，且只是一次聚合查询，可每次检索都探一次。
         """
-        with psycopg.connect(self._dsn) as conn:
+        with pool_conn(self._dsn) as conn:
             row = conn.execute(
                 """
                 SELECT count(c.id), COALESCE(max(c.id), 0),
@@ -75,7 +75,7 @@ class PgVectorStore:
         return (int(row[0]), int(row[1]), str(row[2]))
 
     def count_embedded(self, kb_ids: list[int]) -> int:
-        with psycopg.connect(self._dsn) as conn:
+        with pool_conn(self._dsn) as conn:
             return conn.execute(
                 "SELECT count(*) FROM chunks WHERE embedding IS NOT NULL AND kb_id = ANY(%s)",
                 (kb_ids,),
@@ -86,7 +86,7 @@ class PgVectorStore:
 
         WHERE 分支由调用方布尔决定、非用户输入，仅此两态，不构成注入面。"""
         where = "" if force else "AND embedding IS NULL"
-        with psycopg.connect(self._dsn) as conn:
+        with pool_conn(self._dsn) as conn:
             return conn.execute(
                 f"SELECT id, content FROM chunks WHERE kb_id = ANY(%s) {where} ORDER BY id",
                 (kb_ids,),
@@ -94,7 +94,7 @@ class PgVectorStore:
 
     def set_embeddings(self, rows: list[tuple[int, list[float]]]) -> None:
         """批量写向量。executemany 比逐行省一半网络往返。"""
-        with psycopg.connect(self._dsn) as conn, conn.cursor() as cur:
+        with pool_conn(self._dsn) as conn, conn.cursor() as cur:
             cur.executemany(
                 "UPDATE chunks SET embedding = %s::vector WHERE id = %s",
                 [(format_vector(v), cid) for cid, v in rows],
@@ -105,7 +105,7 @@ class PgVectorStore:
 
         `%s::vector` 里的 %s 仍是参数绑定，禁止把 qvec 拼进 SQL 字符串。"""
         q = format_vector(qvec)
-        with psycopg.connect(self._dsn) as conn:
+        with pool_conn(self._dsn) as conn:
             rows = conn.execute(
                 """
                 SELECT c.id, c.doc_id, c.seq, 1 - (c.embedding <=> %s::vector) AS cosine

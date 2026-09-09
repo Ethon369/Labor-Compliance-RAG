@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-import psycopg
+from app.core.db import pool_conn
 
 # 默认知识库固定 id=1：内置两部法律迁移进来，游客与未选库的会话都落到它上面。
 # 用常量而非"查第一个库"是因为迁移脚本、检索缺省值、测试都要引用同一个身份。
@@ -100,6 +100,6 @@ def ensure_kb_schema(dsn: str) -> None:
 
     单事务执行：DDL 在 PG 里是事务性的，中途失败不会留下半套表。
     """
-    with psycopg.connect(dsn) as conn:
+    with pool_conn(dsn) as conn:
         conn.execute(KB_DDL)
         conn.execute(KB_ALTERS)

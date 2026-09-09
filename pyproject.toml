@@ -6,6 +6,8 @@ requires-python = ">=3.11"
 dependencies = [
     # 条款级切分入库需要 PG 驱动；psycopg3 为锁定技术栈 PostgreSQL 的配套，见 docs/decisions/02
     "psycopg[binary]>=3.2",
+    # V2.4 连接池：替换"每次查询开短连接"，见 docs/decisions/17（唯一获批的性能相关新依赖）
+    "psycopg-pool>=3.2",
     # 配置与数据校验：所有 DB 连接串、后续 API key 一律经环境变量 + Pydantic settings 读取
     "pydantic>=2.10",
     "pydantic-settings>=2.6",

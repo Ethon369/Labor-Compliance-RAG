@@ -22,6 +22,7 @@ from app.api.models import ErrorResponse
 from app.api.routes import router as chat_router
 from app.agent.graph import build_agent_from_config
 from app.core.config import Settings
+from app.core.db import close_pools
 from app.kb.schema import ensure_kb_schema
 from app.rag.retriever import build_retriever
 
@@ -44,6 +45,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # 会话历史：内存列表，最大保留 200 条（个人展示项目不需要持久化）
     _app.state.history: list[dict] = []
     yield
+    close_pools()
 
 
 app = FastAPI(
