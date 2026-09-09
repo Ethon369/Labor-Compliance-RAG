@@ -60,14 +60,16 @@ def _sse_frame(data: dict) -> str:
 
 async def _stream_chat(app, question: str, history: list[dict], session_id: int | None = None,
                        settings=None, uid: int | None = None,
-                       kb_ids: list[int] | None = None) -> AsyncIterator[str]:
+                       kb_ids: list[int] | None = None,
+                       executor=None) -> AsyncIterator[str]:
     """SSE 流式生成器：进度帧 + 逐 token 回答帧 + done 收尾帧。
 
-    为什么"跑图"要放后台线程 + asyncio.Queue 桥接：Graph compile 后 invoke 是同步阻塞，
+    为什么"跑图"要放线程池 + asyncio.Queue 桥接：Graph compile 后 invoke 是同步阻塞，
     直接在本 async 生成器里调用会把事件循环堵死，前端收到的帧会"攒到结尾一次性到达"。
-    于是把完整链路丢进一个守护线程去跑；回答器每产出一段文本就回调 on_token，
-    on_token 用 call_soon_threadsafe 把片段跨线程投进 asyncio.Queue；本生成器 await
-    queue.get() 逐段取出、逐段 yield——既真逐 token 打字机，事件循环也一直空闲。
+    于是把完整链路丢进固定大小线程池去跑（复用线程、上限可控，替代裸 threading.Thread）；
+    回答器每产出一段文本就回调 on_token，on_token 用 call_soon_threadsafe 把片段跨线程
+    投进 asyncio.Queue；本生成器 await queue.get() 逐段取出、逐段 yield——既真逐 token
+    打字机，事件循环也一直空闲。
     （LangGraph astream_events 逐节点事件留待后续，见决策 07 取舍。）
     """
     t_start = time.perf_counter()
@@ -104,7 +106,12 @@ async def _stream_chat(app, question: str, history: list[dict], session_id: int 
             # 关键顺序：token 都在 invoke 期间投递，result 一定在最后 → 队列天然有序
             loop.call_soon_threadsafe(queue.put_nowait, ("result", answer))
 
-        threading.Thread(target=run_graph, daemon=True).start()
+        # 用线程池而非裸 threading.Thread：线程复用、并发上限可控（pool_size=4）。
+        # executor 为 None 时退回裸线程（测试/离线路径没有 lifespan 注入的池）。
+        if executor is not None:
+            loop.run_in_executor(executor, run_graph)
+        else:
+            threading.Thread(target=run_graph, daemon=True).start()
 
         # 消费队列：逐 token 推给前端；遇错误/最终结果进入收尾
         answer = None
@@ -224,14 +231,16 @@ async def chat(req: ChatRequest, request: Request,
             for m in msgs[-_MAX_CONTEXT_TURNS:]
         ]
         stream = _stream_chat(app, req.question, history, session_id=session_id,
-                              settings=settings, uid=uid, kb_ids=kb_ids)
+                              settings=settings, uid=uid, kb_ids=kb_ids,
+                              executor=request.app.state.executor)
     else:
         # 游客：历史由前端上传（内存），不落库；检索范围只限公开库
         kb_ids = resolve_kb_ids(settings.database_url, None, req.kb_id)
         if not kb_ids:
             raise HTTPException(status_code=404, detail="知识库不存在或无权访问")
         history = [m.model_dump() for m in req.history[-_MAX_CONTEXT_TURNS:]]
-        stream = _stream_chat(app, req.question, history, kb_ids=kb_ids)
+        stream = _stream_chat(app, req.question, history, kb_ids=kb_ids,
+                              executor=request.app.state.executor)
         # 游客历史：仍进内存列表（见决策 07 取舍）
         mem: list = request.app.state.history
         mem.append({"question": req.question, "timestamp": None})

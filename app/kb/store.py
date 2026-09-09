@@ -290,3 +290,18 @@ def _sync_counts(conn, kb_id: int, doc_id: int | None = None) -> None:
         " updated_at = now() WHERE id = %s",
         (kb_id, kb_id, kb_id),
     )
+
+
+def doc_embedded(dsn: str, doc_id: int) -> dict[int, tuple[str, str]]:
+    """该文档已有向量的切片：{seq: (content_hash, embedding_text)}。
+
+    供嵌入去重用：重传文档时，内容没变的切片（同 seq 同 content_hash）直接复用旧
+    向量，跳过 embedding API 调用；只对新增/变更的切片重新向量化。
+    """
+    with pool_conn(dsn) as conn:
+        rows = conn.execute(
+            "SELECT seq, content_hash, embedding::text FROM chunks "
+            "WHERE doc_id = %s AND embedding IS NOT NULL",
+            (doc_id,),
+        ).fetchall()
+    return {r[0]: (r[1] or "", r[2]) for r in rows}

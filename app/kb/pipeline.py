@@ -17,6 +17,7 @@ from app.kb import store
 from app.kb.parser import UnsupportedContentError, parse_file
 from app.kb.splitter import hash_content, split_document
 from app.rag.embedder import build_embedder
+from app.rag.vectorstore import parse_vector
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +39,14 @@ def run(dsn: str, doc_id: int, path: str | Path, source_type: str, kb_row: dict)
         parsed = parse_file(path, source_type)
 
         store.set_document_status(dsn, doc_id, "embedding")
+        # 注意：不能用 `or 默认值`——chunk_overlap=0 是合法值（不重叠），`0 or 80` 会
+        # 把它误判成"未设置"覆盖成 80。用 is not None 才能区分"没传"与"传了 0"。
+        chunk_size = kb_row.get("chunk_size")
+        chunk_overlap = kb_row.get("chunk_overlap")
         chunks = split_document(
             parsed,
-            chunk_size=kb_row.get("chunk_size") or 500,
-            overlap=kb_row.get("chunk_overlap") or 80,
+            chunk_size=chunk_size if chunk_size is not None else 500,
+            overlap=chunk_overlap if chunk_overlap is not None else 80,
         )
         if not chunks:
             # 解析出了文字却切不出片：宁可标 failed 也不要留一个 chunk_count=0 的 ready
@@ -50,7 +55,24 @@ def run(dsn: str, doc_id: int, path: str | Path, source_type: str, kb_row: dict)
             return
 
         embedder = build_embedder(Settings())
-        vectors = embedder.embed([c.content for c in chunks])
+
+        # 嵌入去重：重传文档时，内容没变的切片（同 seq 同 content_hash）复用旧向量，
+        # 只对新增/变更的切片调用 embedding。省的是 API 调用与延迟，收益随重传频率放大。
+        existing = store.doc_embedded(dsn, doc_id)   # {seq: (content_hash, embedding_text)}
+        vectors: list[list[float] | None] = [None] * len(chunks)
+        to_embed: list[tuple[int, str]] = []
+        for i, c in enumerate(chunks):
+            h = hash_content(c.content)
+            old = existing.get(c.seq)
+            if old is not None and old[0] == h:
+                vectors[i] = parse_vector(old[1])      # 复用旧向量
+            else:
+                to_embed.append((i, c.content))
+
+        if to_embed:
+            new_vecs = embedder.embed([content for _, content in to_embed])
+            for (idx, _), vec in zip(to_embed, new_vecs):
+                vectors[idx] = vec
 
         payload = [
             {

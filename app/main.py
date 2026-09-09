@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
@@ -62,7 +63,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _app.state.agent = agent
     # 会话历史：内存列表，最大保留 200 条（个人展示项目不需要持久化）
     _app.state.history: list[dict] = []
+    # 问答执行线程池：SSE 里"跑图"是同步阻塞的，用固定大小线程池复用线程，
+    # 替代每次请求裸开 threading.Thread（线程创建/销毁有成本，且数量不可控）。
+    _app.state.executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="chat")
     yield
+    _app.state.executor.shutdown(wait=True)
     close_pools()
 
 

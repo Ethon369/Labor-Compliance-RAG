@@ -191,3 +191,84 @@ def test_missing_document_row_is_ignored(env):
     path = _write(tmp, "x.txt", "内容")
     pipeline.run(dsn, 987654, path, "txt", kb)      # 不存在的 doc_id
     assert not path.exists()
+
+
+def test_reprocess_reuses_unchanged_embeddings(env, monkeypatch):
+    """同一文档重处理时，内容未变的切片复用旧向量，不再调用 embedding。
+
+    嵌入去重（V2.4）：pipeline 写前查 (seq, content_hash)，匹配就复用旧向量，
+    只对新增/变更切片重新向量化。这里用计数 embedder 验证第二次 embed 调用为 0。
+    """
+    from app.rag.vectorstore import parse_vector
+
+    dsn, uid, tmp = env
+    kb = _new_kb(dsn, uid)
+    text = "第一章 总则\n" + "甲" * 400 + "。\n" + "乙" * 400 + "。"
+
+    real_build = pipeline.build_embedder
+    calls = {"n": 0}
+
+    def counting_build(settings):
+        emb = real_build(settings)
+
+        class _Counting:
+            def embed(self, texts):
+                calls["n"] += len(texts)
+                return emb.embed(texts)
+        return _Counting()
+
+    monkeypatch.setattr(pipeline, "build_embedder", counting_build)
+
+    # 第一次：全新内容，全量 embed
+    path1 = _write(tmp, "a.txt", text)
+    doc_id = _new_doc(dsn, kb["id"], path1, "txt")
+    pipeline.run(dsn, doc_id, path1, "txt", kb)
+    first_calls = calls["n"]
+    assert first_calls > 0
+
+    # 第二次：同 doc_id 重处理，内容逐字相同 → 全部复用，embed 调用不增加
+    path2 = _write(tmp, "b.txt", text)
+    pipeline.run(dsn, doc_id, path2, "txt", kb)
+    assert calls["n"] == first_calls
+
+    # 复用后向量仍在且非空（不是 NULL 的"待回填"态）
+    embedded = store.doc_embedded(dsn, doc_id)
+    assert len(embedded) == first_calls
+    assert all(parse_vector(v) for _, (_, v) in embedded.items())
+
+
+def test_reprocess_only_reembeds_changed_slices(env, monkeypatch):
+    """重处理时只有内容变化的切片重新向量化，未变的仍复用。
+
+    用 chunk_overlap=0 让切片内容完全独立：改第一段不会通过 overlap 尾缀污染第二片，
+    这样"只重算变化切片"的断言才成立。
+    """
+    dsn, uid, tmp = env
+    kb = _new_kb(dsn, uid, chunk_overlap=0)
+    text = "第一章 总则\n" + "甲" * 400 + "。\n" + "乙" * 400 + "。"
+
+    real_build = pipeline.build_embedder
+    calls = {"n": 0}
+
+    def counting_build(settings):
+        emb = real_build(settings)
+
+        class _Counting:
+            def embed(self, texts):
+                calls["n"] += len(texts)
+                return emb.embed(texts)
+        return _Counting()
+
+    monkeypatch.setattr(pipeline, "build_embedder", counting_build)
+
+    path1 = _write(tmp, "a.txt", text)
+    doc_id = _new_doc(dsn, kb["id"], path1, "txt")
+    pipeline.run(dsn, doc_id, path1, "txt", kb)
+    first_calls = calls["n"]
+
+    # 只改第一段内容（甲→丙），第二段不变
+    changed = "第一章 总则\n" + "丙" * 400 + "。\n" + "乙" * 400 + "。"
+    path2 = _write(tmp, "b.txt", changed)
+    pipeline.run(dsn, doc_id, path2, "txt", kb)
+    # 变化切片重新 embed，未变切片复用：新增 embed 调用应 < 总片数
+    assert 0 < (calls["n"] - first_calls) < first_calls

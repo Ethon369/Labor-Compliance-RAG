@@ -23,6 +23,13 @@ def format_vector(v: list[float]) -> str:
     return "[" + ",".join(f"{x:.8g}" for x in v) + "]"
 
 
+def parse_vector(text: str) -> list[float]:
+    """PG vector 文本字面量 → float 列表。是 format_vector 的逆操作。
+
+    供嵌入去重复用旧向量用：读回 `embedding::text` 再解析，省一次 embedding 调用。"""
+    return [float(x) for x in text.strip("[]").split(",") if x.strip()]
+
+
 class PgVectorStore:
     def __init__(self, dsn: str, dim: int):
         self._dsn = dsn
