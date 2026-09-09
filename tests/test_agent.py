@@ -24,25 +24,25 @@ from app.agent.protocol import (
     answer_sink_get,
     answer_sink_reset,
     answer_sink_set,
+    scrub_citation_markers,
 )
 from app.agent.state import AgentAnswer
 from app.agent.verify import CitationVerifier
 from app.rag.models import FusedHit, RetrievalResult
 
-OVERTIME = FusedHit(
-    law_id="labor_law",
-    article_no=44,
-    text="安排劳动者延长工作时间的，支付不低于工资的百分之一百五十的工资报酬。",
-    lanes=["bm25"],
-    rrf_score=1.0,
-)
-UNRELATED = FusedHit(
-    law_id="labor_law",
-    article_no=36,
-    text="工时制度。",
-    lanes=["bm25"],
-    rrf_score=1.0,
-)
+def _hit(seq: int, text: str, *, doc_id: int = 1, doc_title: str = "劳动法",
+         source_law_id: str | None = "labor_law", lanes: tuple[str, ...] = ("bm25",),
+         rrf_score: float = 1.0) -> FusedHit:
+    """构造一条切片命中：内置法条默认落在"劳动法"文档上，seq 即条号。"""
+    return FusedHit(
+        chunk_id=seq, kb_id=1, doc_id=doc_id, doc_title=doc_title, seq=seq,
+        heading="", text=text, source_law_id=source_law_id,
+        lanes=list(lanes), rrf_score=rrf_score,
+    )
+
+
+OVERTIME = _hit(44, "安排劳动者延长工作时间的，支付不低于工资的百分之一百五十的工资报酬。")
+UNRELATED = _hit(36, "工时制度。")
 
 
 class FakeRetriever:
@@ -51,7 +51,8 @@ class FakeRetriever:
     def __init__(self, hits: list[FusedHit]):
         self.hits = hits
 
-    def search(self, query: str, top_k: int = 8, use_rerank: bool = True) -> RetrievalResult:
+    def search(self, query: str, top_k: int = 8, use_rerank: bool = True,
+               kb_ids: list[int] | None = None) -> RetrievalResult:
         return RetrievalResult(query=query, hits=self.hits)
 
 
@@ -74,8 +75,31 @@ def test_happy_path_answers_with_citation():
     assert answer.refuse is False
     assert "延长工作时间" in answer.answer  # 答案引用了 top 条文文本
     assert len(answer.citations) == 1
-    assert answer.citations[0].law_id == "labor_law"
-    assert answer.citations[0].article_no == 44
+    assert answer.citations[0].doc_title == "劳动法"
+    assert answer.citations[0].seq == 44
+    assert answer.citations[0].source_law_id == "labor_law"
+    assert answer.citations[0].score == 1.0     # 无精排分时退融合分
+
+
+def test_answer_carries_numbered_citation_markers():
+    """离线模板也要带 [n] 编号——前端角标与引用卡片靠它对位（决策 13）。"""
+    answer = _invoke([OVERTIME], verify_mode="pass")
+    assert "[1]" in answer.answer
+
+
+# ---- 越界角标清理（纯函数）：LLM 偶尔会引用列表外的编号 ----
+
+def test_scrub_removes_out_of_range_markers():
+    assert scrub_citation_markers("结论。[1] 另有说法。[9]", 2) == "结论。[1] 另有说法。"
+
+def test_scrub_keeps_valid_markers():
+    assert scrub_citation_markers("甲[1]乙[2]丙", 2) == "甲[1]乙[2]丙"
+
+def test_scrub_removes_zero_marker():
+    assert scrub_citation_markers("结论[0]。", 3) == "结论。"
+
+def test_scrub_leaves_non_numeric_brackets_alone():
+    assert scrub_citation_markers("第[一]条与[abc]", 3) == "第[一]条与[abc]"
 
 
 def test_rewrite_strips_whitespace():

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from eval.compat import translate_gold
 from eval.metrics import hit_rate_at_k, mean_recall, recall_at_k
 from eval.questions import QUESTIONS
 
@@ -37,6 +38,23 @@ def test_coverage_of_both_laws():
     laws = {law_id for _, golds in QUESTIONS for law_id, _ in golds}
     assert "labor_law" in laws
     assert "labor_contract_law" in laws
+
+
+# ---------- 身份翻译（eval/compat，纯函数部分） ----------
+
+def test_translate_gold_maps_law_id_to_doc_id():
+    """gold 从 (law_id, no) 翻成 (doc_id, no)；seq==article_no 由迁移规则保证。"""
+    qs = [("问题一", [("labor_law", 44), ("labor_contract_law", 46)])]
+    out = translate_gold(qs, {"labor_law": 2, "labor_contract_law": 1})
+    assert out == [("问题一", [(2, 44), (1, 46)])]
+
+
+def test_translate_gold_drops_unknown_law_without_crashing(capsys):
+    """库里没有对应文档时丢弃该标注并告警——不能静默算成"没命中"。"""
+    qs = [("问题一", [("labor_law", 44), ("ghost_law", 1)])]
+    out = translate_gold(qs, {"labor_law": 2})
+    assert out == [("问题一", [(2, 44)])]
+    assert "找不到对应文档" in capsys.readouterr().err
 
 
 def test_multi_gold_questions_exist():

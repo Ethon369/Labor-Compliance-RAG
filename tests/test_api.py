@@ -22,28 +22,25 @@ from app.rag.models import FusedHit, RetrievalResult
 
 # ---- 测试用命中数据 ----
 
-OVERTIME_HIT = FusedHit(
-    law_id="labor_law",
-    article_no=44,
-    text="安排劳动者延长工作时间的，支付不低于工资的百分之一百五十的工资报酬。",
-    lanes=["bm25"],
-    rrf_score=1.0,
-)
+def _hit(seq: int, text: str, *, doc_id: int = 1, doc_title: str = "劳动法",
+         source_law_id: str | None = "labor_law") -> FusedHit:
+    return FusedHit(
+        chunk_id=seq, kb_id=1, doc_id=doc_id, doc_title=doc_title, seq=seq,
+        heading="", text=text, source_law_id=source_law_id,
+        lanes=["bm25"], rrf_score=1.0,
+    )
 
-UNRELATED_HIT = FusedHit(
-    law_id="labor_law",
-    article_no=36,
-    text="工时制度。",
-    lanes=["bm25"],
-    rrf_score=1.0,
-)
+
+OVERTIME_HIT = _hit(44, "安排劳动者延长工作时间的，支付不低于工资的百分之一百五十的工资报酬。")
+UNRELATED_HIT = _hit(36, "工时制度。")
 
 
 class FakeRetriever:
     def __init__(self, hits: list[FusedHit]):
         self.hits = hits
 
-    def search(self, query: str, top_k: int = 8, use_rerank: bool = True) -> RetrievalResult:
+    def search(self, query: str, top_k: int = 8, use_rerank: bool = True,
+               kb_ids: list[int] | None = None) -> RetrievalResult:
         return RetrievalResult(query=query, hits=self.hits)
 
 
@@ -113,7 +110,14 @@ def test_chat_sse_done_frame_has_answer(client_with_agent):
     assert done_payload["refuse"] is False
     assert len(done_payload["answer"]) > 0
     assert len(done_payload["citations"]) > 0
-    assert done_payload["citations"][0]["law_id"] == "labor_law"
+    # 引用升级：定位字段 + 截断片段 + 相关度分（前端卡片与 [n] 角标就靠这些）
+    cite = done_payload["citations"][0]
+    assert cite["doc_title"] == "劳动法"
+    assert cite["seq"] == 44
+    assert cite["source_law_id"] == "labor_law"
+    assert cite["snippet"].startswith("安排劳动者延长工作时间")
+    assert len(cite["snippet"]) <= 300
+    assert cite["score"] == 1.0
 
 
 def test_chat_sse_refuse_path(client_refuse):

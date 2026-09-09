@@ -18,11 +18,9 @@ from app.rag.models import FusedHit, RetrievalResult
 
 
 TEST_HIT = FusedHit(
-    law_id="labor_law",
-    article_no=21,
+    chunk_id=21, kb_id=1, doc_id=2, doc_title="劳动法", seq=21, heading="第二章 劳动合同的订立",
     text="劳动合同期限三个月以上不满一年的，试用期不得超过一个月。",
-    lanes=["bm25"],
-    rrf_score=1.0,
+    source_law_id="labor_law", lanes=["bm25"], rrf_score=1.0,
 )
 
 
@@ -30,7 +28,8 @@ class FakeRetriever:
     def __init__(self, hits):
         self.hits = hits
 
-    def search(self, query: str, top_k: int = 8, use_rerank: bool = True) -> RetrievalResult:
+    def search(self, query: str, top_k: int = 8, use_rerank: bool = True,
+               kb_ids: list[int] | None = None) -> RetrievalResult:
         return RetrievalResult(query=query, hits=self.hits)
 
 

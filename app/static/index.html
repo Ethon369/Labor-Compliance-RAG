@@ -111,6 +111,16 @@
   .citations li { margin-bottom: 4px; color: var(--text); }
   .citations code { background: #d1fae5; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
 
+  /* 引用卡片（V2）：文档名 + 段号 + 相关度，展开看片段；角标点击高亮对应卡片 */
+  .cit-list { margin-top: 8px; padding-left: 0; list-style: none; }
+  .cit-card { padding: 8px 10px; margin-bottom: 6px; background: #fff; border: 1px solid #bbf7d0; border-radius: 8px; transition: box-shadow .2s, border-color .2s; }
+  .cit-head { font-size: 13px; color: #166534; font-weight: 600; }
+  .cit-badge { display: inline-block; background: #d1fae5; border-radius: 4px; padding: 0 5px; margin-right: 2px; }
+  .cit-snippet { margin-top: 5px; font-size: 12.5px; color: var(--text); line-height: 1.6; }
+  .cit-mark { color: #166534; cursor: pointer; font-weight: 700; padding: 0 1px; }
+  .cit-mark:hover { text-decoration: underline; }
+  .cit-flash { border-color: #16a34a; box-shadow: 0 0 0 3px rgba(22, 163, 74, .18); }
+
   /* 欢迎区（空状态） */
   .welcome { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; }
   .welcome .card {
@@ -408,30 +418,106 @@ function renderMsgs(msgs) {
       addBubble('user', currentUsername ? currentUsername : '您', m.content);
     } else {
       const div = addBubble('assistant', '⚖️ 助手', m.content || '（无回答）');
+      renderAnswerText(div.querySelector('.bubble'), m.content || '');
       attachCitations(div, m.citations || []);
     }
   }
   chatArea.scrollTop = chatArea.scrollHeight;
 }
 
-/** 给助手气泡挂引用列表 */
+/**
+ * 把答案文本渲染进气泡：只把 [n] 角标变成可点元素，其余一律用纯文本节点插入。
+ * 用 createTextNode 而不是 innerHTML——LLM 输出是不可信输入，不能当 HTML 解析。
+ */
+function renderAnswerText(bubbleEl, text) {
+  bubbleEl.textContent = '';
+  const re = /\[(\d{1,3})\]/g;
+  let last = 0, m;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) {
+      bubbleEl.appendChild(document.createTextNode(text.slice(last, m.index)));
+    }
+    const n = Number(m[1]);
+    const sup = document.createElement('sup');
+    sup.className = 'cit-mark';
+    sup.dataset.idx = String(n);
+    sup.textContent = '[' + n + ']';
+    sup.title = '查看引用 ' + n;
+    sup.addEventListener('click', function () { focusCitation(bubbleEl, n); });
+    bubbleEl.appendChild(sup);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) {
+    bubbleEl.appendChild(document.createTextNode(text.slice(last)));
+  }
+}
+
+/** 点角标：滚动到第 n 张引用卡片并闪一下 */
+function focusCitation(bubbleEl, n) {
+  const card = bubbleEl.querySelector('.cit-card[data-idx="' + n + '"]');
+  if (!card) return;
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  card.classList.add('cit-flash');
+  setTimeout(function () { card.classList.remove('cit-flash'); }, 1200);
+}
+
+/** 给助手气泡挂引用卡片（文档名 · 第 N 条/段 · 相关度，含片段） */
 function attachCitations(div, citations) {
   if (!citations || citations.length === 0) return;
   const details = document.createElement('details');
   details.className = 'citations';
   details.open = true;
   const summary = document.createElement('summary');
-  summary.textContent = `📋 引用法律条文（${citations.length} 条）`;
+  summary.textContent = '📋 引用来源（' + citations.length + ' 条）';
   details.appendChild(summary);
-  const ul = document.createElement('ul');
-  for (const c of citations) {
+
+  const list = document.createElement('ol');
+  list.className = 'cit-list';
+  citations.forEach(function (c, i) {
+    const idx = i + 1;
     const li = document.createElement('li');
-    li.innerHTML = `<code>《${lawName(c.law_id)}》第${c.article_no}条</code>`;
-    if (c.chapter) li.innerHTML += ` <small>（${c.chapter}）</small>`;
-    ul.appendChild(li);
-  }
-  details.appendChild(ul);
+    li.className = 'cit-card';
+    li.dataset.idx = String(idx);
+
+    const head = document.createElement('div');
+    head.className = 'cit-head';
+    const badge = document.createElement('span');
+    badge.className = 'cit-badge';
+    badge.textContent = '[' + idx + ']';
+    head.appendChild(badge);
+    head.appendChild(document.createTextNode(' ' + citeTitle(c) + ' ' + citeMeta(c)));
+    li.appendChild(head);
+
+    if (c.snippet) {
+      const p = document.createElement('div');
+      p.className = 'cit-snippet';
+      p.textContent = c.snippet;
+      li.appendChild(p);
+    }
+    list.appendChild(li);
+  });
+  details.appendChild(list);
   div.querySelector('.bubble').appendChild(details);
+}
+
+/** 引用标题：新格式用文档名；改造前的老数据回退到 law_id 的中文名 */
+function citeTitle(c) {
+  if (c.doc_title) return '《' + c.doc_title + '》';
+  if (c.law_id) return '《' + lawName(c.law_id) + '》';
+  return '（未知来源）';
+}
+
+/** 引用定位与相关度：内置法条说"第 N 条"，上传长文档说"第 N 段" */
+function citeMeta(c) {
+  const seq = (c.seq != null) ? c.seq : c.article_no;
+  if (seq == null) return '';
+  // source_law_id 或老格式的 law_id 存在 → 是法条；否则是文档片段
+  const isArticle = !!(c.source_law_id || (!c.doc_id && c.law_id));
+  let s = '第 ' + seq + ' ' + (isArticle ? '条' : '段');
+  const heading = c.heading || c.chapter;
+  if (heading) s += ' · ' + heading;
+  if (typeof c.score === 'number') s += ' · 相关度 ' + c.score.toFixed(2);
+  return s;
 }
 
 // ===== 新对话：游客/登录都清空当前，游客重置内存上下文，登录等下次提问自动建会话 =====
@@ -621,9 +707,9 @@ function finishDone(frame) {
   let div = streamBubble;
   if (!div) {
     div = addBubble('assistant', '⚖️ 助手', payload.answer || '（空回答）');
-  } else {
-    div.querySelector('.bubble').textContent = payload.answer || '（空回答）';
   }
+  // 流式期间是纯文本累积；收尾时再渲染一次，把 [n] 升级成可点角标
+  renderAnswerText(div.querySelector('.bubble'), payload.answer || '（空回答）');
   streamBubble = null;
   streamText = '';
   attachCitations(div, payload.citations || []);

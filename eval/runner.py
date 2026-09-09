@@ -34,60 +34,62 @@ from eval.questions import QUESTIONS
 class Retriever(Protocol):
     """评测只要三样：纯向量、BM25、混合（可开关 rerank）。HybridRetriever 满足。"""
 
-    def search_vector(self, query: str, top_k: int | None = None) -> list[tuple[str, int]]: ...
+    def search_vector(self, query: str, top_k: int | None = None) -> list[tuple[int, int]]: ...
 
-    def search_bm25(self, query: str, top_k: int | None = None) -> list[tuple[str, int]]: ...
+    def search_bm25(self, query: str, top_k: int | None = None) -> list[tuple[int, int]]: ...
 
-    def search(self, query: str, top_k: int = 8) -> list[tuple[str, int]]: ...
+    def search(self, query: str, top_k: int = 8) -> list[tuple[int, int]]: ...
 
 
 @dataclass
 class Method:
     label: str
-    fn: callable  # (query, top_k) -> list[(law_id, article_no)]
+    fn: callable  # (query, top_k) -> list[(doc_id, seq)]
 
 
 def _wrap_vector(rt: Retriever, top_k: int):
     """纯向量：只用 search_vector 这一路的 top-k。"""
-    def f(q: str, k: int = top_k) -> list[tuple[str, int]]:
+    def f(q: str, k: int = top_k) -> list[tuple[int, int]]:
         hits = rt.search_vector(q, top_k=k)
-        return [(h.law_id, h.article_no) for h in hits]
+        return [(h.doc_id, h.seq) for h in hits]
     return f
 
 
 def _wrap_bm25(rt: Retriever, top_k: int):
-    def f(q: str, k: int = top_k) -> list[tuple[str, int]]:
+    def f(q: str, k: int = top_k) -> list[tuple[int, int]]:
         hits = rt.search_bm25(q, top_k=k)
-        return [(h.law_id, h.article_no) for h in hits]
+        return [(h.doc_id, h.seq) for h in hits]
     return f
 
 
 def _wrap_mixed(rt: Retriever, top_k: int, use_rerank: bool):
-    def f(q: str, k: int = top_k) -> list[tuple[str, int]]:
+    def f(q: str, k: int = top_k) -> list[tuple[int, int]]:
         res = rt.search(q, top_k=k, use_rerank=use_rerank)
-        return [(h.law_id, h.article_no) for h in res.hits]
+        return [(h.doc_id, h.seq) for h in res.hits]
     label = "混合+rerank" if use_rerank else "混合(RRF)"
     return label, f
 
 
 # ---------- 表格输出 ----------
 
-def print_table(methods: list[tuple[str, callable]], top_k: int) -> None:
+def print_table(methods: list[tuple[str, callable]], questions: list, top_k: int) -> None:
     """跑一遍评测并打印对齐的对比表。"""
     header = f"{'方法':<20s} {'Recall@{:<3d}'.format(top_k)}  {'HitRate@{:<3d}'.format(top_k)}"
     print(header)
     print("-" * len(header))
     for label, fn in methods:
-        rec = mean_recall(QUESTIONS, fn, top_k)
-        hr = hit_rate_at_k(QUESTIONS, fn, top_k)
+        rec = mean_recall(questions, fn, top_k)
+        hr = hit_rate_at_k(questions, fn, top_k)
         print(f"{label:<20s} {rec:>7.4f}      {hr:>7.4f}")
     print()
 
 
 # ---------- 组装 ----------
 
-def run_comparison(rt: Retriever, top_k: int = 8) -> None:
-    """拉齐同一 rt 实例，三种方法跑一轮对比并打印表。"""
+def run_comparison(rt: Retriever, questions: list, top_k: int = 8) -> None:
+    """拉齐同一 rt 实例，三种方法跑一轮对比并打印表。
+
+    questions 需是已翻译成 (doc_id, seq) 身份的评测集——见 eval/compat.py。"""
     methods: list[tuple[str, callable]] = [
         ("纯向量", _wrap_vector(rt, top_k)),
         ("纯BM25", _wrap_bm25(rt, top_k)),
@@ -97,7 +99,7 @@ def run_comparison(rt: Retriever, top_k: int = 8) -> None:
     # 混合+rerank——开启精排
     methods.append(_wrap_mixed(rt, top_k, use_rerank=True))
 
-    print_table(methods, top_k)
+    print_table(methods, questions, top_k)
 
 
 # ---------- CLI ----------
@@ -110,11 +112,15 @@ def main(argv: list[str] | None = None) -> int:
 
     from app.core.config import Settings
     from app.rag.retriever import build_retriever
+    from eval.compat import law_to_doc, translate_gold
 
     settings = Settings()
     rt = build_retriever(settings)
+    # 评测集 gold 是 (law_id, article_no)；检索返回的是 (doc_id, seq)。入口翻译一次，
+    # 指标函数与问题集都不必改（见 eval/compat.py 为何不重标注）
+    questions = translate_gold(QUESTIONS, law_to_doc(settings.database_url))
 
-    run_comparison(rt, top_k=args.top_k)
+    run_comparison(rt, questions, top_k=args.top_k)
     return 0
 
 

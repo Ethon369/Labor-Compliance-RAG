@@ -39,7 +39,8 @@ def make_rewrite_node(rewriter: QueryRewriter):
 
 def make_retrieve_node(retriever: RetrievalProtocol):
     def node(state: dict[str, Any]) -> dict[str, Any]:
-        result = retriever.search(state["rewritten"])
+        # kb_ids 由路由层按可见性解析后放进输入；缺省让检索器用默认库
+        result = retriever.search(state["rewritten"], kb_ids=state.get("kb_ids"))
         return {"hits": result.hits}
 
     return node
@@ -71,8 +72,15 @@ def route_after_verify(state: dict[str, Any]) -> str:
 def make_answer_node(answerer: AnswerGenerator):
     def node(state: dict[str, Any]) -> dict[str, Any]:
         hits = state.get("hits") or []
+        # 引用顺序 = 检索排序顺序，与 answerer 拼给 LLM 的 [n] 编号一一对应
         citations = [
-            Citation(law_id=h.law_id, article_no=h.article_no, chapter=h.chapter, text=h.text)
+            Citation(
+                kb_id=h.kb_id, doc_id=h.doc_id, doc_title=h.doc_title, seq=h.seq,
+                page=h.page, heading=h.heading, text=h.text,
+                # 相关度优先用精排分（更接近"对这个问题有多相关"），无精排时退融合分
+                score=h.rerank_score if h.rerank_score is not None else h.rrf_score,
+                source_law_id=h.source_law_id,
+            )
             for h in hits
         ]
         # 路由层在流式请求时通过 answer_sink 注入 token 接收器（见 protocol.answer_sink_*）。

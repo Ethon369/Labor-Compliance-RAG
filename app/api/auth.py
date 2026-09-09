@@ -133,6 +133,32 @@ def ensure_user_schema(dsn: str) -> None:
         )
 
 
+def ensure_admin(dsn: str, username: str, password: str) -> int:
+    """幂等确保管理员账号存在，返回 uid。
+
+    - 用户名不存在 → 建号并置 role='admin'
+    - 已存在 → 只把 role 补成 admin，**绝不覆盖已改过的密码**
+      （否则每次重启都会把管理员改过的密码打回默认值，是真实事故来源）
+
+    依赖 users.role 列已存在——调用前须先跑 ensure_user_schema + ensure_kb_schema。
+    """
+    with psycopg.connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT id, role FROM users WHERE username = %s", (username,)
+        ).fetchone()
+        if row is None:
+            created = conn.execute(
+                "INSERT INTO users (username, password_hash, role) VALUES (%s, %s, 'admin') "
+                "RETURNING id",
+                (username, hash_password(password)),
+            ).fetchone()
+            return created[0]
+        uid, role = row
+        if role != "admin":
+            conn.execute("UPDATE users SET role = 'admin' WHERE id = %s", (uid,))
+        return uid
+
+
 def save_chat_history(dsn: str, user_id: int, question: str, answer: str, citations: list[dict]) -> None:
     """登录用户的一条问答落库。citations 存 JSON 文本，读取时再解析。"""
     with psycopg.connect(dsn) as conn:
@@ -162,14 +188,24 @@ def load_user_history(dsn: str, user_id: int, limit: int) -> tuple[list[dict], i
 
 # ---- 多轮会话工具函数 ----
 
-def create_session(dsn: str, user_id: int, title: str = "新对话") -> int:
-    """创建会话，返回 session_id。"""
+def create_session(dsn: str, user_id: int, title: str = "新对话",
+                   kb_id: int | None = None) -> int:
+    """创建会话，返回 session_id。kb_id 记下这个会话问答时检索哪个知识库。"""
     with psycopg.connect(dsn) as conn:
         row = conn.execute(
-            "INSERT INTO chat_sessions (user_id, title) VALUES (%s, %s) RETURNING id",
-            (user_id, title),
+            "INSERT INTO chat_sessions (user_id, title, kb_id) VALUES (%s, %s, %s) RETURNING id",
+            (user_id, title, kb_id),
         ).fetchone()
     return row[0]
+
+
+def session_kb_id(dsn: str, session_id: int) -> int | None:
+    """读会话绑定的知识库（可能为 NULL——库被删或从未绑定）。"""
+    with psycopg.connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT kb_id FROM chat_sessions WHERE id = %s", (session_id,)
+        ).fetchone()
+    return row[0] if row else None
 
 
 def save_session_message(dsn: str, session_id: int, role: str, content: str, citations: list[dict] | None = None) -> None:

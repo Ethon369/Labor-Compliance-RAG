@@ -22,14 +22,25 @@ class AgentInput(BaseModel):
     只被 answer 节点消费；rewrite/retrieve 仍只看当前问题（见决策 10 取舍）。"""
     original: str
     history: list[dict] = Field(default_factory=list)
+    # 检索范围（可见知识库集合）；None 用检索器默认库。由 API 层解析可见性后注入
+    kb_ids: list[int] | None = None
 
 
 class Citation(BaseModel):
-    """核验通过、准备写进答案的条文引用：只携带定位键（law_id/article_no）与条文原文。"""
-    law_id: str
-    article_no: int
-    chapter: str | None = None
+    """核验通过、准备写进答案的引用：定位键（哪库/哪文档/第几段）+ 原文 + 相关度分。
+
+    score 取精排分优先、否则融合分——前端卡片按它显示"相关度"，是排序结果的一部分
+    （引用不是 LLM 生成的，而是检索命中的结构化字段，见决策 13）。
+    """
+    kb_id: int
+    doc_id: int
+    doc_title: str
+    seq: int
+    page: int | None = None
+    heading: str = ""
     text: str
+    score: float | None = None
+    source_law_id: str | None = None
 
 
 class AgentAnswer(BaseModel):
@@ -50,6 +61,7 @@ class AgentState(TypedDict, total=False):
     """
     original: str
     history: list[dict]
+    kb_ids: list[int]
     rewritten: str
     hits: list[FusedHit]
     supported: bool

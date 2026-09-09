@@ -20,6 +20,7 @@ from app.api.models import ErrorResponse
 from app.api.routes import router as chat_router
 from app.agent.graph import build_agent_from_config
 from app.core.config import Settings
+from app.kb.schema import ensure_kb_schema
 from app.rag.retriever import build_retriever
 
 
@@ -27,10 +28,12 @@ from app.rag.retriever import build_retriever
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """应用生命周期：启动时一次性组装 settings/retriever/agent，关闭无需清理。"""
     settings = Settings()
+    # 建表顺序有依赖，不能调换：users 先于 kb（kb.owner_id 外键指向 users），
+    # kb 先于 build_retriever（后者 ensure_ready 要给 chunks 加 embedding 列）。
+    ensure_user_schema(settings.database_url)
+    ensure_kb_schema(settings.database_url)
     retriever = build_retriever(settings)
     agent = build_agent_from_config(retriever, settings)
-    # 认证 + 登录用户历史两张表（幂等，启动可反复执行）
-    ensure_user_schema(settings.database_url)
     _app.state.settings = settings
     _app.state.retriever = retriever
     _app.state.agent = agent

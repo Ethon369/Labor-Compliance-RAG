@@ -13,6 +13,7 @@ ToolCallingAnswerer 内部处理 function calling 循环：LLM 判断需要工�
 from __future__ import annotations
 
 import json
+import re
 import urllib.request
 from contextvars import ContextVar
 from typing import Any, Callable, Iterator, Protocol
@@ -49,8 +50,11 @@ def answer_sink_reset(token: Any) -> None:
 
 class RetrievalProtocol(Protocol):
     """检索能力：给查询，还 RetrievalResult。签名故意对齐 HybridRetriever.search，
-    真实现无需适配就是兼容的——这也是"面向接口编程"的落点。"""
-    def search(self, query: str, top_k: int = 8, use_rerank: bool = True) -> RetrievalResult: ...
+    真实现无需适配就是兼容的——这也是"面向接口编程"的落点。
+
+    kb_ids：检索范围（可见知识库集合），None 表示用检索器自己的默认库。"""
+    def search(self, query: str, top_k: int = 8, use_rerank: bool = True,
+               kb_ids: list[int] | None = None) -> RetrievalResult: ...
 
 
 class QueryRewriter(Protocol):
@@ -74,6 +78,37 @@ class AnswerGenerator(Protocol):
         history: list[dict] | None = None,
         on_token: Callable[[str], None] | None = None,
     ) -> str: ...
+
+
+# ---- 来源编号：答案里的 [n] 与引用卡片一一对应 ----
+
+_CITATION_RE = re.compile(r"\[(\d{1,3})\]")
+
+
+def format_source_lines(hits: list[FusedHit]) -> str:
+    """把命中拼成带编号的来源列表，编号从 1 起、与 citations 顺序严格一致。
+
+    内置法条显示"第 N 条"、上传文档显示"第 N 段"——靠 source_law_id 区分，
+    让用户一眼看出引的是法条还是文档片段。
+    """
+    lines: list[str] = []
+    for i, h in enumerate(hits, start=1):
+        unit = "条" if h.source_law_id else "段"
+        head = f"（{h.heading}）" if h.heading else ""
+        lines.append(f"[{i}] 《{h.doc_title}》第{h.seq}{unit}{head}：{h.text}")
+    return "\n".join(lines) if lines else "（未检索到相关条文）"
+
+
+def scrub_citation_markers(text: str, max_n: int) -> str:
+    """去掉越界的 [n] 角标：LLM 偶尔会引用列表外的编号。
+
+    只清理 n > max_n 的（越界一定是错的）；n ≤ max_n 的保留——即使 LLM 引错了具体
+    哪一条，也比把整句角标抹掉更可读，而且这是"模型不听话"的可见信号。纯函数可单测。
+    """
+    def _sub(m: re.Match[str]) -> str:
+        return m.group(0) if 1 <= int(m.group(1)) <= max_n else ""
+
+    return _CITATION_RE.sub(_sub, text)
 
 
 # ---- 离线默认实现（零 key 可跑） ----
@@ -101,8 +136,7 @@ class TemplateAnswerer:
     ) -> str:
         if not hits:
             return "未检索到可引用的法律条文。"
-        lines = [f"《{h.law_id}》第{h.article_no}条：{h.text}" for h in hits]
-        return "可参考以下条文：\n" + "\n".join(lines)
+        return "可参考以下条文：\n" + format_source_lines(hits)
 
 
 # ---- 基础 LLM 调用（urllib 直连） ----
@@ -241,8 +275,10 @@ class LLMRewriter:
 
 _ANSWER_SYSTEM_HEAD = (
     "你是劳动争议智能合规助手。你的回答必须严格基于以下检索到的法律条文原文。"
-    "如果条文能回答用户的问题，请组织一段清晰、易懂的回答，并在每个结论后"
-    "注明引用的法条出处（例如: 根据《劳动法》第44条）。"
+    "如果条文能回答用户的问题，请组织一段清晰、易懂的回答。"
+    "引用规则（必须遵守）：每条结论后紧跟方括号编号标注出处，编号就是下方条文列表"
+    "开头的数字，例如「……应当支付经济补偿。[1]」。只能引用列表里出现过的编号，"
+    "不得引用列表外的来源，不得自造编号。"
     "不要编造条文里没有的结论，不要给出法律意见——你只是帮用户理解条文。"
     "如果条文与问题无关或不足以回答，直接说「无法提供明确结论」。"
     "回答字数控制在 300 字以内，通俗易懂。"
@@ -269,10 +305,7 @@ class LLMAnswerer:
         self._temperature = temperature
 
     def _build_messages(self, query, hits, history) -> list[dict[str, str]]:
-        article_lines: list[str] = []
-        for h in hits:
-            article_lines.append(f"《{h.law_id}》第{h.article_no}条：{h.text}")
-        articles = "\n".join(article_lines) if article_lines else "（未检索到相关条文）"
+        articles = format_source_lines(hits)
         messages: list[dict[str, str]] = [{"role": "system", "content": _ANSWER_SYSTEM_HEAD}]
         # 多轮上下文：把之前几轮问答作为 user/assistant 消息拼进 prompt，
         # 让 LLM 能回答"承接上文"的追问（如"那第二条呢"）
@@ -303,7 +336,8 @@ class LLMAnswerer:
                 self._endpoint, self._api_key, self._model,
                 messages, self._temperature,
             )
-        return text.strip()
+        # 越界角标兜底：LLM 偶尔引用列表外的编号，抹掉它比留一个点不开的 [9] 好
+        return scrub_citation_markers(text.strip(), len(hits))
 
 
 # ---- LLM 实现（带 function calling 工具调用循环） ----
@@ -311,8 +345,10 @@ class LLMAnswerer:
 
 _TOOL_ANSWER_SYSTEM = (
     "你是劳动争议智能合规助手。你的回答必须严格基于以下检索到的法律条文原文。"
-    "如果条文能回答用户的问题，请组织一段清晰、易懂的回答，并在每个结论后"
-    "注明引用的法条出处（例如: 根据《劳动法》第44条）。"
+    "如果条文能回答用户的问题，请组织一段清晰、易懂的回答。"
+    "引用规则（必须遵守）：每条结论后紧跟方括号编号标注出处，编号就是下方条文列表"
+    "开头的数字，例如「……应当支付经济补偿。[1]」。只能引用列表里出现过的编号，"
+    "不得引用列表外的来源，不得自造编号。"
     "当问题涉及经济补偿金/赔偿金的具体金额计算时，使用 calculate_compensation 工具"
     "进行计算，然后将计算结果自然地融入回答中。"
     "不要编造条文里没有的结论，不要给出法律意见——你只是帮用户理解条文。"
@@ -531,10 +567,7 @@ class ToolCallingAnswerer:
         history: list[dict] | None = None,
         on_token: Callable[[str], None] | None = None,
     ) -> str:
-        article_lines: list[str] = []
-        for h in hits:
-            article_lines.append(f"《{h.law_id}》第{h.article_no}条：{h.text}")
-        articles = "\n".join(article_lines) if article_lines else "（未检索到相关条文）"
+        articles = format_source_lines(hits)
         messages: list[dict[str, Any]] = [{"role": "system", "content": _TOOL_ANSWER_SYSTEM}]
         # 同 LLMAnswerer：前几轮问答拼进上下文，支持承接式追问
         for h in (history or [])[-6:]:
@@ -542,10 +575,11 @@ class ToolCallingAnswerer:
                 messages.append({"role": h["role"], "content": h["content"]})
         messages.append({"role": "user", "content": _ANSWER_USER_TPL.format(query=query, articles=articles)})
         runner = _call_chat_with_tools_stream if on_token is not None else _call_chat_with_tools
-        return runner(
+        text = runner(
             self._endpoint, self._api_key, self._model,
             messages, self._tools_registry.tool_schemas(),
             self._tools_registry,
             self._temperature, self._max_rounds,
             **({"on_token": on_token} if on_token is not None else {}),
         )
+        return scrub_citation_markers(text, len(hits))

@@ -25,11 +25,10 @@ from app.rag.models import FusedHit
 # ====== 计算器纯函数单测 ======
 
 LABOR_CONTRACT_47 = FusedHit(
-    law_id="labor_contract_law",
-    article_no=47,
+    chunk_id=47, kb_id=1, doc_id=1, doc_title="劳动合同法", seq=47,
+    heading="第四章 劳动合同的解除和终止",
     text="经济补偿按劳动者在本单位工作的年限，每满一年支付一个月工资...",
-    lanes=["bm25"],
-    rrf_score=1.0,
+    source_law_id="labor_contract_law", lanes=["bm25"], rrf_score=1.0,
 )
 
 

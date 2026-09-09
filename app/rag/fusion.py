@@ -7,8 +7,11 @@
 from __future__ import annotations
 
 from collections import Counter
+from typing import Hashable
 
-_Key = tuple[str, int]  # (law_id, article_no)，跨路的稳定文档标识
+# 跨路的稳定文档标识。放宽为 Hashable 是因为语料单元从"法条"换成了"切片"：
+# 键从 (law_id, article_no) 变成 chunk_id(int)，而融合本身只吃相等性与顺序。
+_Key = Hashable
 
 
 def rrf_fuse(rank_lists: list[list[_Key]], k: int = 60) -> list[tuple[_Key, float]]:

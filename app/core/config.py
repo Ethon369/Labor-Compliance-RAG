@@ -46,3 +46,8 @@ class Settings(BaseSettings):
 
     # 认证签名密钥：注册/登录 token 的 HMAC 密钥（生产环境必须从 .env 覆盖）
     auth_secret: str = "dev-secret-change-me"
+
+    # 管理员账号：启动时幂等确保存在（用户名已存在则只补 role，不覆盖已改密码）
+    # 默认值是演示凭据，README/.env.example 均标注"生产必须修改"
+    admin_username: str = "admin"
+    admin_password: str = "123456"

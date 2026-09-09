@@ -26,6 +26,7 @@ class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000, description="劳动争议问题")
     session_id: int | None = Field(default=None, description="登录用户目标会话 id；空则新建")
     history: list[HistoryMsg] = Field(default_factory=list, description="游客端多轮上下文")
+    kb_id: int | None = Field(default=None, description="目标知识库；空则用默认库/会话已绑定的库")
 
 
 class SseChunk(BaseModel):
@@ -47,9 +48,24 @@ class SseChunk(BaseModel):
 
 
 class CitationBrief(BaseModel):
-    """API 暴露的简化引用：仅含定位信息，不返回完整条文文本（客户端可自行查阅）。"""
-    law_id: str
-    article_no: int
+    """API 暴露的引用：定位信息 + 截断片段 + 相关度分，供前端可展开卡片与 [n] 角标。
+
+    snippet 截断到 300 字：卡片只需让人判断"是不是这条"，不必把整段（甚至整页）
+    塞进响应与历史记录。law_id/article_no/chapter 三个老字段保留为可空——
+    改造前落库的历史消息仍是旧结构，回读时要能降级渲染（见决策 13）。
+    """
+    kb_id: int | None = None
+    doc_id: int | None = None
+    doc_title: str | None = None
+    seq: int | None = None
+    page: int | None = None
+    heading: str = ""
+    snippet: str = ""
+    score: float | None = None
+    source_law_id: str | None = None
+    # ---- 旧格式兼容（V2.1 之前的 citations 只有这三个字段）----
+    law_id: str | None = None
+    article_no: int | None = None
     chapter: str | None = None
 
 

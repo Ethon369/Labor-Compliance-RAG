@@ -7,36 +7,11 @@ from __future__ import annotations
 import pytest
 
 from app.rag.embedder import HashEmbedder
-from app.rag.models import ArticleRef, LaneHit
 from app.rag.reranker import TermOverlapReranker
 from app.rag.retriever import HybridRetriever
 
-# ---- 复用 test_rag_offline 的语料和假向量库 ----
-
-CORPUS = [
-    ArticleRef(law_id="labor_law", article_no=36, text="国家实行劳动者每日工作时间不超过八小时、平均每周工作时间不超过四十四小时的工时制度。"),
-    ArticleRef(law_id="labor_law", article_no=44, text="安排劳动者延长工作时间的，支付不低于工资的百分之一百五十的工资报酬；休息日安排劳动者工作又不能安排补休的，支付不低于工资百分之二百的工资报酬。"),
-    ArticleRef(law_id="labor_law", article_no=50, text="工资应当以货币形式按月支付给劳动者本人。不得克扣或者无故拖欠劳动者的工资。"),
-    ArticleRef(law_id="labor_law", article_no=79, text="劳动争议发生后，当事人可以向本单位劳动争议调解委员会申请调解；调解不成，可以向劳动争议仲裁委员会申请仲裁。"),
-    ArticleRef(law_id="labor_contract_law", article_no=46, text="有下列情形之一的，用人单位应当向劳动者支付经济补偿。"),
-]
-
-
-class _FakeVectorStore:
-    def __init__(self, corpus: list[ArticleRef], embedder: HashEmbedder):
-        self._docs = corpus
-        self._embs = [embedder.embed_one(d.text) for d in corpus]
-
-    def all_articles(self) -> list[ArticleRef]:
-        return self._docs
-
-    def vector_topk(self, qvec: list[float], top_k: int) -> list[LaneHit]:
-        scored = sorted(
-            ((sum(a * b for a, b in zip(qvec, e)), d) for e, d in zip(self._embs, self._docs)),
-            key=lambda t: t[0],
-            reverse=True,
-        )
-        return [LaneHit(law_id=d.law_id, article_no=d.article_no, score=s) for s, d in scored[:top_k]]
+# 复用 test_rag_offline 的语料与假向量库，避免两处各维护一份（同一目录，pytest 直接可 import）
+from test_rag_offline import CORPUS, _FakeVectorStore
 
 
 # ---------- TermOverlapReranker 纯逻辑 ----------

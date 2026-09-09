@@ -32,15 +32,18 @@ from app.api.auth import (
     list_user_sessions,
     load_session_messages,
     load_user_history,
-    save_chat_history,
     save_session_message,
+    session_kb_id,
 )
 from app.agent.protocol import answer_sink_reset, answer_sink_set
+from app.kb.schema import DEFAULT_KB_ID
+from app.kb.store import resolve_kb_ids
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 _MAX_HISTORY = 200
 _MAX_CONTEXT_TURNS = 6  # 多轮上下文：取最近 N 轮问答喂给 LLM，防 prompt 过长
+_SNIPPET_CHARS = 300    # 引用卡片里的片段长度：够判断"是不是这条"，不必塞整段
 
 
 def _sse_frame(data: dict) -> str:
@@ -53,7 +56,8 @@ def _sse_frame(data: dict) -> str:
 
 
 async def _stream_chat(app, question: str, history: list[dict], session_id: int | None = None,
-                       settings=None, uid: int | None = None) -> AsyncIterator[str]:
+                       settings=None, uid: int | None = None,
+                       kb_ids: list[int] | None = None) -> AsyncIterator[str]:
     """SSE 流式生成器：进度帧 + 逐 token 回答帧 + done 收尾帧。
 
     为什么"跑图"要放后台线程 + asyncio.Queue 桥接：Graph compile 后 invoke 是同步阻塞，
@@ -81,7 +85,9 @@ async def _stream_chat(app, question: str, history: list[dict], session_id: int 
             """守护线程：注入 token 接收器后同步跑完整链路，把片段/结果投进队列。"""
             ctx = answer_sink_set(on_token)  # answer 节点据此拿到本请求的接收器
             try:
-                result = app.invoke({"original": question, "history": history})
+                result = app.invoke({
+                    "original": question, "history": history, "kb_ids": kb_ids,
+                })
                 answer = result["answer"]
             except Exception as exc:
                 loop.call_soon_threadsafe(queue.put_nowait, ("error", str(exc)))
@@ -121,12 +127,19 @@ async def _stream_chat(app, question: str, history: list[dict], session_id: int 
             # 有 token 流时前端已经边收边渲染，不需要它。
             yield _sse_frame(SseChunk(stage="answering", content="正在整理回答..."))
 
-        # 完成帧：携带最终答案 + 引用 + 会话 id（前端据此收尾、落历史、挂引用）
+        # 完成帧：携带最终答案 + 引用 + 会话 id（前端据此收尾、落历史、挂引用）。
+        # 引用只下发"定位 + 截断片段 + 相关度"——不下发整段原文，响应与历史都省一大截。
         citations = [
             CitationBrief(
-                law_id=c.law_id,
-                article_no=c.article_no,
-                chapter=c.chapter,
+                kb_id=c.kb_id,
+                doc_id=c.doc_id,
+                doc_title=c.doc_title,
+                seq=c.seq,
+                page=c.page,
+                heading=c.heading,
+                snippet=(c.text or "")[:_SNIPPET_CHARS],
+                score=c.score,
+                source_law_id=c.source_law_id,
             )
             for c in answer.citations
         ]
@@ -148,7 +161,7 @@ async def _stream_chat(app, question: str, history: list[dict], session_id: int 
                     session_id,
                     "assistant",
                     answer.answer,
-                    [c.model_dump() for c in answer.citations],
+                    [c.model_dump() for c in citations],   # 存 brief（含截断片段），不存整段原文
                 )
             except Exception:
                 pass
@@ -184,20 +197,30 @@ async def chat(req: ChatRequest, request: Request):
             msgs = load_session_messages(settings.database_url, session_id, uid)
             if not msgs:
                 raise HTTPException(status_code=404, detail="会话不存在或无权访问")
+            # 续问以会话绑定的库为准：会话是"围绕某个知识库的对话"，
+            # 前端换了选择器但续问旧会话时，不该把上下文与另一个库的条文混在一起
+            bound_kb = session_kb_id(settings.database_url, session_id)
+            kb_ids = resolve_kb_ids(settings.database_url, uid, bound_kb or req.kb_id)
         else:
+            kb_ids = resolve_kb_ids(settings.database_url, uid, req.kb_id)
+            if not kb_ids:
+                raise HTTPException(status_code=404, detail="知识库不存在或无权访问")
             title = req.question[:20]
-            session_id = create_session(settings.database_url, uid, title)
+            session_id = create_session(settings.database_url, uid, title, kb_id=kb_ids[0])
             msgs = []
         history = [
             {"role": m["role"], "content": m["content"]}
             for m in msgs[-_MAX_CONTEXT_TURNS:]
         ]
         stream = _stream_chat(app, req.question, history, session_id=session_id,
-                              settings=settings, uid=uid)
+                              settings=settings, uid=uid, kb_ids=kb_ids)
     else:
-        # 游客：历史由前端上传（内存），不落库
+        # 游客：历史由前端上传（内存），不落库；检索范围只限公开库
+        kb_ids = resolve_kb_ids(settings.database_url, None, req.kb_id)
+        if not kb_ids:
+            raise HTTPException(status_code=404, detail="知识库不存在或无权访问")
         history = [m.model_dump() for m in req.history[-_MAX_CONTEXT_TURNS:]]
-        stream = _stream_chat(app, req.question, history)
+        stream = _stream_chat(app, req.question, history, kb_ids=kb_ids)
         # 游客历史：仍进内存列表（见决策 07 取舍）
         mem: list = request.app.state.history
         mem.append({"question": req.question, "timestamp": None})
