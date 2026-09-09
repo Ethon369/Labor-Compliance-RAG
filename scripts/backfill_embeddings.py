@@ -20,19 +20,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.core.config import Settings  # noqa: E402
 from app.kb.schema import DEFAULT_KB_ID  # noqa: E402
-from app.rag.embedder import HashEmbedder, SiliconFlowEmbedder  # noqa: E402
+from app.rag.embedder import build_embedder  # noqa: E402
 from app.rag.vectorstore import PgVectorStore  # noqa: E402
 
 
 def _make_embedder(s: Settings):
-    if s.embedding_mode == "siliconflow":
-        return SiliconFlowEmbedder(
-            api_key=s.siliconflow_api_key or "",
-            model=s.siliconflow_model,
-            base_url=s.siliconflow_base_url,
-            dim=s.embedding_dim,
-        )
-    return HashEmbedder(s.embedding_dim)
+    """保留原名供 migrate_default_kb 引用；实现下沉到 app.rag.embedder.build_embedder。"""
+    return build_embedder(s)
 
 
 def main(argv: list[str] | None = None) -> int:

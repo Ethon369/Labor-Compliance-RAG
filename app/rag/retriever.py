@@ -15,7 +15,7 @@ from typing import NamedTuple
 from app.core.config import Settings
 from app.kb.schema import DEFAULT_KB_ID
 from app.rag.bm25 import Bm25Index
-from app.rag.embedder import Embedder, HashEmbedder, SiliconFlowEmbedder
+from app.rag.embedder import Embedder, build_embedder
 from app.rag.fusion import rrf_fuse
 from app.rag.models import ChunkRef, FusedHit, LaneHit, RetrievalResult
 from app.rag.reranker import Reranker, SiliconFlowReranker, TermOverlapReranker
@@ -167,15 +167,7 @@ def build_retriever(settings: Settings) -> HybridRetriever:
     """
     store = PgVectorStore(settings.database_url, settings.embedding_dim)
     store.ensure_ready()
-    if settings.embedding_mode == "siliconflow":
-        embedder: Embedder = SiliconFlowEmbedder(
-            api_key=settings.siliconflow_api_key or "",
-            model=settings.siliconflow_model,
-            base_url=settings.siliconflow_base_url,
-            dim=settings.embedding_dim,
-        )
-    else:
-        embedder = HashEmbedder(settings.embedding_dim)
+    embedder: Embedder = build_embedder(settings)
 
     # reranker 装配：三态——siliconflow / offline / None（不使用）
     reranker = None

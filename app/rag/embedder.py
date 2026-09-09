@@ -92,3 +92,20 @@ class SiliconFlowEmbedder:
 
     def embed_one(self, text: str) -> list[float]:
         return self.embed([text])[0]
+
+
+def build_embedder(settings) -> Embedder:
+    """按配置选 embedding 提供方——全项目唯一的"选谁当 embedder"的入口。
+
+    backfill 脚本、检索组装（build_retriever）、上传流水线（pipeline）都走这里，
+    避免三处各写一遍 if siliconflow、换提供方时漏改一处。
+    缺 key 当场抛错而非静默降级：静默降级会让线上检索质量无声劣化且难以察觉。
+    """
+    if settings.embedding_mode == "siliconflow":
+        return SiliconFlowEmbedder(
+            api_key=settings.siliconflow_api_key or "",
+            model=settings.siliconflow_model,
+            base_url=settings.siliconflow_base_url,
+            dim=settings.embedding_dim,
+        )
+    return HashEmbedder(settings.embedding_dim)
