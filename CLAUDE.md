@@ -13,6 +13,7 @@
 - 部署：Docker Compose（app + postgres）
 - 文档解析（V2.3 新增，已获同意）：pypdf（PDF 取文字层）、python-docx（Word 段落）
 - 连接池（V2.4 新增，已获同意）：psycopg_pool（替换每次查询开短连接）
+- 文件上传（V2.3 新增，FastAPI 官方配套件）：python-multipart（UploadFile 解析必需）
 
 ## 硬性规则
 1. 禁止引入上述清单之外的依赖；确有必要，先说明理由并征得我同意

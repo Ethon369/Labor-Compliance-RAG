@@ -26,6 +26,9 @@ services:
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com/v1}
       - LLM_MODEL=${LLM_MODEL:-deepseek-chat}
       - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.0}
+      # 管理员账号：首次启动自动创建（已存在则只补 role，绝不覆盖已改密码）
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-123456}
     depends_on:
       postgres:
         condition: service_healthy  # 等数据库彻底就绪再启动 app

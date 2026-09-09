@@ -18,6 +18,8 @@ dependencies = [
     # 阶段 6：FastAPI + uvicorn（Web 服务 + SSE 流式接口）
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
+    # 文件上传（知识库文档）：FastAPI 的 UploadFile 解析必需，官方配套件
+    "python-multipart>=0.0.9",
     # V2.3 文档解析：PDF 与 Word 是"知识库上传"绕不开的两种格式，各取一个成熟纯 Python 库
     # （不需要编译依赖；扫描版 PDF 无文字层的问题见 docs/decisions/15 已知取舍）
     "pypdf>=5.0",
