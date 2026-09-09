@@ -17,7 +17,12 @@ import psycopg
 # 用常量而非"查第一个库"是因为迁移脚本、检索缺省值、测试都要引用同一个身份。
 DEFAULT_KB_ID = 1
 
-KB_DDL = """
+# 切分参数默认值：kb 表的列默认值与 splitter 的函数默认值共用这两个常量，
+# 避免"表里写 500、代码里写 300"这种漂移（建库时未指定参数的新库就取它们）。
+DEFAULT_CHUNK_SIZE = 500
+DEFAULT_CHUNK_OVERLAP = 80
+
+KB_DDL = f"""
 CREATE TABLE IF NOT EXISTS kb (
     id            serial PRIMARY KEY,
     name          text NOT NULL,
@@ -26,8 +31,8 @@ CREATE TABLE IF NOT EXISTS kb (
     -- 公开库：他人可见、可问答，但只有 owner/admin 能改
     is_public     boolean NOT NULL DEFAULT false,
     -- 切分参数随库走：不同语料（法条 / 长文档）适合的片长不同，写在库里而不是全局配置
-    chunk_size    integer NOT NULL DEFAULT 500,
-    chunk_overlap integer NOT NULL DEFAULT 80,
+    chunk_size    integer NOT NULL DEFAULT {DEFAULT_CHUNK_SIZE},
+    chunk_overlap integer NOT NULL DEFAULT {DEFAULT_CHUNK_OVERLAP},
     embed_model   text NOT NULL DEFAULT '',
     doc_count     integer NOT NULL DEFAULT 0,
     chunk_count   integer NOT NULL DEFAULT 0,

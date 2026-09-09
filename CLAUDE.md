@@ -11,6 +11,8 @@
 - Embedding：bge-m3（本地）或 API
 - LLM：OpenAI 兼容接口（DeepSeek/Qwen 均可），key 从环境变量读取
 - 部署：Docker Compose（app + postgres）
+- 文档解析（V2.3 新增，已获同意）：pypdf（PDF 取文字层）、python-docx（Word 段落）
+- 连接池（V2.4 新增，已获同意）：psycopg_pool（替换每次查询开短连接）
 
 ## 硬性规则
 1. 禁止引入上述清单之外的依赖；确有必要，先说明理由并征得我同意
