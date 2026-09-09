@@ -15,7 +15,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.auth import ensure_user_schema, router as auth_router
+from app.api.admin_routes import router as admin_router
+from app.api.auth import ensure_admin, ensure_user_schema, router as auth_router
 from app.api.models import ErrorResponse
 from app.api.routes import router as chat_router
 from app.agent.graph import build_agent_from_config
@@ -32,6 +33,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # kb 先于 build_retriever（后者 ensure_ready 要给 chunks 加 embedding 列）。
     ensure_user_schema(settings.database_url)
     ensure_kb_schema(settings.database_url)
+    # 管理员账号幂等确保存在（用户名已存在则只补 role，不覆盖已改密码）
+    ensure_admin(settings.database_url, settings.admin_username, settings.admin_password)
     retriever = build_retriever(settings)
     agent = build_agent_from_config(retriever, settings)
     _app.state.settings = settings
@@ -58,6 +61,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(admin_router)
 app.include_router(chat_router)
 
 # 挂载静态前端：放在路由之后，避免抢占 /docs、/chat 等路径。

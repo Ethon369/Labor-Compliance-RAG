@@ -272,6 +272,8 @@ let lastQuestion = '';           // 最近一次提问（finishDone 记录游客
 // ===== token 管理（存 localStorage：刷新页面不丢登录态）=====
 function getToken() { return localStorage.getItem('lcr_token') || ''; }
 function getUsername() { return localStorage.getItem('lcr_username') || ''; }
+function getRole() { return localStorage.getItem('lcr_role') || 'user'; }
+function isAdmin() { return getRole() === 'admin'; }
 
 // ===== 登录 / 注册 =====
 function openAuth() {
@@ -313,9 +315,10 @@ async function submitAuth() {
       return;
     }
 
-    // 登录成功：存 token，关闭弹窗，进入新对话、刷新侧边栏会话列表
+    // 登录成功：存 token + 角色（角色只用于显示入口，真正的边界在后端 require_admin）
     localStorage.setItem('lcr_token', data.token);
     localStorage.setItem('lcr_username', data.username);
+    localStorage.setItem('lcr_role', data.role || 'user');
     currentUsername = data.username;
     currentSessionId = null;
     closeAuth();
@@ -330,6 +333,7 @@ async function submitAuth() {
 function logout() {
   localStorage.removeItem('lcr_token');
   localStorage.removeItem('lcr_username');
+  localStorage.removeItem('lcr_role');
   currentUsername = null;
   currentSessionId = null;
   guestHistory = [];

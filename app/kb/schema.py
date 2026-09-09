@@ -78,6 +78,9 @@ KB_ALTERS = """
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'user'
     CHECK (role IN ('user', 'admin'));
 
+-- 禁用：保留账号与历史（不删数据），但拒绝登录。比"删除用户"温和，管理员可反悔
+ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled boolean NOT NULL DEFAULT false;
+
 -- ON DELETE SET NULL：删库不能被历史会话的外键阻断；该会话检索时回退默认库
 ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS kb_id integer
     REFERENCES kb(id) ON DELETE SET NULL;

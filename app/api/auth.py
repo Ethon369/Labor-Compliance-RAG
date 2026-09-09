@@ -17,7 +17,7 @@ import time
 import psycopg
 from fastapi import APIRouter, HTTPException, Request
 
-from app.api.models import AuthRequest, AuthResponse
+from app.api.models import AuthRequest, AuthResponse, ChangePasswordRequest, MeResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -159,6 +159,71 @@ def ensure_admin(dsn: str, username: str, password: str) -> int:
         return uid
 
 
+def get_user(dsn: str, uid: int) -> dict | None:
+    """按 id 取用户（含角色与禁用状态），不存在返回 None。"""
+    with psycopg.connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT id, username, role, disabled, created_at FROM users WHERE id = %s", (uid,)
+        ).fetchone()
+    if row is None:
+        return None
+    return {"id": row[0], "username": row[1], "role": row[2], "disabled": row[3],
+            "created_at": row[4].isoformat()}
+
+
+def change_password(dsn: str, uid: int, old_password: str, new_password: str) -> bool:
+    """校验旧密码后更新为新密码；旧密码不对返回 False（不区分"用户不存在"）。"""
+    with psycopg.connect(dsn) as conn:
+        row = conn.execute("SELECT password_hash FROM users WHERE id = %s", (uid,)).fetchone()
+        if row is None or not verify_password(old_password, row[0]):
+            return False
+        conn.execute(
+            "UPDATE users SET password_hash = %s WHERE id = %s",
+            (hash_password(new_password), uid),
+        )
+    return True
+
+
+def list_users(dsn: str, limit: int, offset: int) -> tuple[list[dict], int]:
+    """分页列出用户（新注册的在前）。返回 (records, total)。"""
+    with psycopg.connect(dsn) as conn:
+        total = conn.execute("SELECT count(*) FROM users").fetchone()[0]
+        rows = conn.execute(
+            "SELECT id, username, role, disabled, created_at FROM users "
+            "ORDER BY id DESC LIMIT %s OFFSET %s",
+            (limit, offset),
+        ).fetchall()
+    return [
+        {"id": r[0], "username": r[1], "role": r[2], "disabled": r[3],
+         "created_at": r[4].isoformat()}
+        for r in rows
+    ], total
+
+
+def set_role(dsn: str, uid: int, role: str) -> bool:
+    """改角色；用户不存在返回 False。"""
+    with psycopg.connect(dsn) as conn:
+        cur = conn.execute("UPDATE users SET role = %s WHERE id = %s", (role, uid))
+        return cur.rowcount > 0
+
+
+def reset_password(dsn: str, uid: int, new_password: str) -> bool:
+    """管理员重置密码（不需要旧密码）；用户不存在返回 False。"""
+    with psycopg.connect(dsn) as conn:
+        cur = conn.execute(
+            "UPDATE users SET password_hash = %s WHERE id = %s",
+            (hash_password(new_password), uid),
+        )
+        return cur.rowcount > 0
+
+
+def set_disabled(dsn: str, uid: int, disabled: bool) -> bool:
+    """禁用/解禁账号；用户不存在返回 False。"""
+    with psycopg.connect(dsn) as conn:
+        cur = conn.execute("UPDATE users SET disabled = %s WHERE id = %s", (disabled, uid))
+        return cur.rowcount > 0
+
+
 def save_chat_history(dsn: str, user_id: int, question: str, answer: str, citations: list[dict]) -> None:
     """登录用户的一条问答落库。citations 存 JSON 文本，读取时再解析。"""
     with psycopg.connect(dsn) as conn:
@@ -253,7 +318,7 @@ def load_session_messages(dsn: str, session_id: int, user_id: int | None = None)
 
 @router.post("/register")
 async def register(req: AuthRequest, request: Request):
-    """注册：用户名查重 → 哈希入库 → 直接返回 token（免二次登录）。"""
+    """注册：用户名查重 → 哈希入库 → 直接返回 token（免二次登录）。新用户恒为普通用户。"""
     settings = request.app.state.settings
     with psycopg.connect(settings.database_url) as conn:
         dup = conn.execute("SELECT 1 FROM users WHERE username = %s", (req.username,)).fetchone()
@@ -265,32 +330,47 @@ async def register(req: AuthRequest, request: Request):
         ).fetchone()
         user_id = row[0]
     token = make_token(user_id, settings.auth_secret)
-    return AuthResponse(token=token, username=req.username)
+    return AuthResponse(token=token, username=req.username, role="user")
 
 
 @router.post("/login")
 async def login(req: AuthRequest, request: Request):
-    """登录：查用户 → 验密码 → 发 token。密码错统一 401（不暴露用户是否存在）。"""
+    """登录：查用户 → 验密码 → 发 token。
+
+    密码错与账号被禁用都返回 401 同一句话——不暴露"这个账号存在但被禁了"，
+    否则等于给攻击者一个枚举有效用户名的信号。"""
     settings = request.app.state.settings
     with psycopg.connect(settings.database_url) as conn:
         row = conn.execute(
-            "SELECT id, password_hash FROM users WHERE username = %s", (req.username,)
+            "SELECT id, password_hash, role, disabled FROM users WHERE username = %s",
+            (req.username,),
         ).fetchone()
-    if row is None or not verify_password(req.password, row[1]):
+    if row is None or row[3] or not verify_password(req.password, row[1]):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     token = make_token(row[0], settings.auth_secret)
-    return AuthResponse(token=token, username=req.username)
+    return AuthResponse(token=token, username=req.username, role=row[2])
 
 
 @router.get("/me")
 async def me(request: Request):
-    """凭 token 查当前用户名（前端登录态恢复用）；无效 → 401。"""
+    """凭 token 查当前用户（前端登录态恢复 + 角色判断用）；无效 → 401。"""
     settings = request.app.state.settings
     uid = _bearer_user_id(request, settings.auth_secret)
     if uid is None:
         raise HTTPException(status_code=401, detail="未登录或登录已过期")
-    with psycopg.connect(settings.database_url) as conn:
-        row = conn.execute("SELECT username FROM users WHERE id = %s", (uid,)).fetchone()
-    if row is None:
+    user = get_user(settings.database_url, uid)
+    if user is None or user["disabled"]:
         raise HTTPException(status_code=401, detail="用户不存在")
-    return {"username": row[0]}
+    return MeResponse(id=user["id"], username=user["username"], role=user["role"])
+
+
+@router.post("/change-password")
+async def change_password_endpoint(req: ChangePasswordRequest, request: Request):
+    """修改自己的密码：验旧密码 → 更新。旧密码错 400（这里已确认用户身份，不必模糊化）。"""
+    settings = request.app.state.settings
+    uid = _bearer_user_id(request, settings.auth_secret)
+    if uid is None:
+        raise HTTPException(status_code=401, detail="未登录或登录已过期")
+    if not change_password(settings.database_url, uid, req.old_password, req.new_password):
+        raise HTTPException(status_code=400, detail="原密码不正确")
+    return {"ok": True}

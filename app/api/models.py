@@ -90,6 +90,47 @@ class AuthRequest(BaseModel):
 
 
 class AuthResponse(BaseModel):
-    """认证成功响应：token 由前端存 localStorage，请求时放 Authorization 头。"""
+    """认证成功响应：token 由前端存 localStorage，请求时放 Authorization 头。
+
+    role 随登录一起下发——前端据此决定是否显示"平台管理"入口（隐藏入口不等于安全，
+    真正的边界在每个接口的 require_admin）。"""
     token: str
     username: str
+    role: str = "user"
+
+
+class MeResponse(BaseModel):
+    """当前用户信息（前端登录态恢复 + 角色判断用）。"""
+    id: int
+    username: str
+    role: str
+
+
+class ChangePasswordRequest(BaseModel):
+    """修改密码：验旧密码 + 新密码强度校验。"""
+    old_password: str = Field(..., min_length=1, max_length=64)
+    new_password: str = Field(..., min_length=6, max_length=64, description="至少 6 位")
+
+
+class UserBrief(BaseModel):
+    """管理员视角的用户条目。"""
+    id: int
+    username: str
+    role: str
+    disabled: bool = False
+    created_at: str
+
+
+class ChangeRoleRequest(BaseModel):
+    """管理员升降级：只允许 user / admin 两态。"""
+    role: Literal["user", "admin"]
+
+
+class ResetPasswordRequest(BaseModel):
+    """管理员重置他人密码（不需要旧密码）。"""
+    new_password: str = Field(..., min_length=6, max_length=64)
+
+
+class SetDisabledRequest(BaseModel):
+    """管理员禁用/解禁账号。"""
+    disabled: bool

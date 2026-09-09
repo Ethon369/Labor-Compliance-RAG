@@ -9,6 +9,21 @@ import psycopg
 from app.kb.schema import DEFAULT_KB_ID
 
 
+def fetch_kb(dsn: str, kb_id: int) -> dict | None:
+    """取一个知识库的基本信息；不存在返回 None。"""
+    with psycopg.connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT id, name, description, owner_id, is_public, chunk_size, chunk_overlap, "
+            "doc_count, chunk_count, created_at FROM kb WHERE id = %s",
+            (kb_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {"id": row[0], "name": row[1], "description": row[2], "owner_id": row[3],
+            "is_public": row[4], "chunk_size": row[5], "chunk_overlap": row[6],
+            "doc_count": row[7], "chunk_count": row[8], "created_at": row[9].isoformat()}
+
+
 def visible_kb_ids(dsn: str, uid: int | None) -> list[int]:
     """该用户可检索的知识库 id 集合：自己的 + 公开的；admin 是全部库。
 
