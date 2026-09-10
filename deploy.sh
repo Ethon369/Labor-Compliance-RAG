@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# 劳动争议智能合规助手 · 一键部署脚本
+#
+# 用法（在干净的云服务器上执行）：
+#   bash deploy.sh
+#
+# 脚本做了什么：检查 Docker → 拉代码 → 生成 .env（含随机密钥）→ 启动容器 → 首次入库 → 健康检查
+# 幂等设计：重复执行只会 pull 最新代码并重建，不会清掉已有数据。
+
+set -euo pipefail
+
+REPO="${REPO:-https://gitee.com/ren-youwen/Labor-Compliance-RAG.git}"  # 国内服务器用 gitee 更快
+DIR="${DIR:-Labor-Compliance-RAG}"
+COMPOSE_FILE="docker-compose.prod.yml"
+
+log() { printf '\033[36m[deploy]\033[0m %s\n' "$*"; }
+err() { printf '\033[31m[error]\033[0m %s\n' "$*" >&2; }
+
+# ---------- 1. 检查 Docker ----------
+if ! command -v docker >/dev/null 2>&1; then
+  log "未检测到 Docker，开始安装..."
+  curl -fsSL https://get.docker.com | sh
+  systemctl enable --now docker
+else
+  log "Docker 已存在：$(docker --version | head -1)"
+fi
+docker compose version >/dev/null 2>&1 || { err "Docker Compose 插件不可用，请升级 Docker"; exit 1; }
+
+# ---------- 2. 获取代码 ----------
+if [ -d "$DIR/.git" ]; then
+  log "目录已存在，拉取最新代码..."
+  git -C "$DIR" pull --ff-only
+else
+  log "克隆仓库：$REPO"
+  git clone "$REPO" "$DIR"
+fi
+cd "$DIR"
+
+# ---------- 3. 生成 .env ----------
+if [ ! -f .env ]; then
+  if [ ! -f .env.production ]; then
+    err "缺少 .env.production 模板"; exit 1
+  fi
+  log "生成 .env，并填充随机密钥..."
+  cp .env.production .env
+
+  # 自动生成强随机值，避免弱口令上线
+  RAND_SECRET="$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  RAND_ADMIN="$(openssl rand -hex 8  2>/dev/null || head -c 8  /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  RAND_PG="$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+
+  # 用 | 作分隔符，避免随机值里的 / 等特殊字符冲突
+  sed -i "s|^AUTH_SECRET=.*|AUTH_SECRET=${RAND_SECRET}|"       .env
+  sed -i "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=${RAND_ADMIN}|"  .env
+  sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${RAND_PG}|" .env
+
+  log "已生成的管理员口令：$RAND_ADMIN  （请保存，稍后可自行修改 .env）"
+else
+  log ".env 已存在，跳过生成（如需重置请手动删除后重跑）"
+fi
+
+# ---------- 4. 启动容器 ----------
+log "构建并启动服务..."
+docker compose -f "$COMPOSE_FILE" up -d --build
+
+log "等待数据库就绪..."
+for i in $(seq 1 60); do
+  if docker compose -f "$COMPOSE_FILE" exec -T postgres pg_isready -U labor -d labor >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
+
+# ---------- 5. 首次入库（幂等：已入库会跳过/覆盖写） ----------
+log "检查是否需要初始化法条数据..."
+CHUNKS="$(docker compose -f "$COMPOSE_FILE" exec -T postgres \
+  psql -U labor -d labor -tAc "SELECT count(*) FROM chunks" 2>/dev/null || echo 0)"
+if [ "${CHUNKS:-0}" -gt 0 ] 2>/dev/null; then
+  log "已有 ${CHUNKS} 条切片，跳过入库"
+else
+  log "首次入库..."
+  docker compose -f "$COMPOSE_FILE" exec -T app python scripts/ingest_laws.py
+fi
+
+# ---------- 6. 健康检查 ----------
+log "健康检查..."
+sleep 3
+if curl -sf -o /dev/null http://127.0.0.1/; then
+  IP="$(curl -s --max-time 3 ifconfig.me || echo '<服务器公网IP>')"
+  log "✅ 部署完成！访问： http://${IP}"
+  log "   管理员账号见上方生成记录（或 .env 里的 ADMIN_USERNAME / ADMIN_PASSWORD）"
+else
+  err "服务未就绪，查看日志：docker compose -f $COMPOSE_FILE logs -f"
+  exit 1
+fi
