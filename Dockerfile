@@ -8,6 +8,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# 国内构建加速：Debian apt 源换阿里云镜像（python:3.11-slim 的源文件存在两种格式，都替换）
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null; \
+    sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null; true
+
 # psycopg 需 libpq；gcc 用于编译部分二进制包（如 rank-bm25 的 numpy 传递依赖）
 RUN apt-get update && \
     apt-get install -y --no-install-recommends libpq-dev gcc && \
@@ -16,9 +20,9 @@ RUN apt-get update && \
 # 先复制依赖清单——Docker 层缓存：依赖不变时不用重装
 COPY pyproject.toml .
 
-# 安装项目依赖（pyproject.toml 的 dependencies + fastapi/uvicorn 已在清单内）
+# 安装项目依赖：pip 源同样换阿里云镜像（pypi.org 国内直连慢）
 # 不使用 -e ".[dev]"——容器内不需要 pytest 等开发依赖
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ .
 
 # 复制运行时需要的目录
 COPY app/ app/
