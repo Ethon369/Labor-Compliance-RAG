@@ -64,14 +64,19 @@ fi
 docker compose version >/dev/null 2>&1 || { err "Docker Compose 插件不可用，请升级 Docker"; exit 1; }
 
 # ---------- 2. 获取代码 ----------
-if [ -d "$DIR/.git" ]; then
+# 已经站在项目目录里就直接 pull，避免再 clone 一次形成嵌套目录
+if [ -f docker-compose.prod.yml ] && [ -d .git ]; then
+  log "已在项目目录内，拉取最新代码..."
+  git pull --ff-only
+elif [ -d "$DIR/.git" ]; then
   log "目录已存在，拉取最新代码..."
   git -C "$DIR" pull --ff-only
+  cd "$DIR"
 else
   log "克隆仓库：$REPO"
   git clone "$REPO" "$DIR"
+  cd "$DIR"
 fi
-cd "$DIR"
 
 # ---------- 3. 生成 .env ----------
 if [ ! -f .env ]; then
