@@ -7,7 +7,7 @@
 
 **工具调用（function calling）的底层是 JSON Schema 约定——LLM 不是"调用函数"，而是输出一个 JSON 对象描述"我想调哪个函数、参数是什么"；宿主程序收到后真正执行，再把结果用 JSON 发回去。** 本项目手写 Schema + urllib 直连，不用 LangChain tool 装饰器——因为 Schema 措辞直接影响 LLM 会不会调、参数怎么填，手写才能精确控制。
 
-## 2. Function Calling 的底层机制（面试必答）
+## 2. Function Calling 的底层机制（核心要点）
 
 整个过程是 **4 步 JSON 约定循环**，不是魔法：
 
@@ -95,7 +95,7 @@
 - **ToolEntry.invoke**：支持 input_model 校验（Pydantic），在工具执行前拦截非法参数——LLM 的 JSON 参数即使格式对、值也可能非法（负工资），校验在宿主侧兜底
 - **`default_registry()` 工厂**：后续加工具（工伤待遇、生育津贴）只需在此函数里多注册一条
 
-## 6. 工具选择失败怎么兜底（面试高频）
+## 6. 工具选择失败怎么兜底（常见问题）
 
 三个层次的兜底，从近到远：
 
@@ -115,6 +115,6 @@
 ## 8. 已知取舍
 
 1. **只有一个工具**：当前仅注册经济补偿金计算器。工伤待遇、生育津贴、未签合同双倍工资等后续按同一模式注册——Schema 手写、Pydantic 校验、ToolEntry 包装。
-2. **手写 Schema 的人力成本**：每个工具约 20 行 Schema dict。好处是措辞可控，坏处是没自动生成方便。对"展示项目"来说手写是正解——面试官会问"Schema 怎么设计的"，你指着每个字段的 description 讲为什么这么写。
+2. **手写 Schema 的人力成本**：每个工具约 20 行 Schema dict。好处是措辞可控，坏处是没自动生成方便。对"展示项目"来说手写是正解——每个字段的 description 都写明了设计理由，便于定位与排错。
 3. **urllib 直连无流式**：function calling 的请求/响应与文本对话走同一 `/chat/completions` 端点，urllib 够用。阶段 6 做 SSE 流式时，流式 tool_calls 的处理会在 API 层实现。
 4. **没有并行工具调用**：当前一次 LLM 响应可能返回多个 tool_calls，但 `_call_chat_with_tools` 是串行执行的（逐个调）。对于当前单一工具场景无关紧要；多个独立工具时可以并行执行（用 `concurrent.futures`），这是 v2 优化项。

@@ -38,7 +38,7 @@ docker-compose.yml
 | single-stage（选中） | ~400MB | Dockerfile 20 行，一眼看懂 |
 | multi-stage + slim + 清缓存 | ~250MB | 构建/运行两阶段，调试麻烦 |
 
-本项目是纯 Python 应用（无前端构建产物），多阶段能省约 150MB（主要是编译工具链 gcc/libpq-dev），但对展示项目不划算——镜像 400MB 在个人展示场景完全合理，多阶段增加的维护成本（面试官看 Dockerfile 要理解两个 FROM 的关系）不值得。
+本项目是纯 Python 应用（无前端构建产物），多阶段能省约 150MB（主要是编译工具链 gcc/libpq-dev），但对展示项目不划算——镜像 400MB 在个人展示场景完全合理，多阶段增加的维护成本（需要理解两个 FROM 的关系）不值得。
 
 ### 3.2 为什么用 pip install . 不逐条 pip install
 
