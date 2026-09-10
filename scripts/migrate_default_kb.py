@@ -1,8 +1,8 @@
 """把 laws/articles 里的内置法条迁移成"默认知识库"（kb_id=1）。
 
-为什么要有这一步：V2 起检索层统一走 chunks 表（多知识库共用一套代码），内置的
-《劳动法》《劳动合同法》不再是特殊路径，而是"默认库里的两个文档"。迁移规则：
-- 一部法 = 一个 document（短名"劳动法"/"劳动合同法"，source_law_id 记来源）
+为什么要有这一步：V2 起检索层统一走 chunks 表（多知识库共用一套代码），内置法条不再是
+特殊路径，而是"默认库里的若干个文档"。迁移规则：
+- 一部法 = 一个 document（短名如"劳动法"，source_law_id 记来源）
 - 一条法条 = 一个 chunk（seq=条号，可逆；heading=章名；page 为空）
 - articles 表保留不删，继续作为迁移数据源（见决策 11）
 
@@ -29,13 +29,15 @@ from app.kb.schema import DEFAULT_KB_ID, ensure_kb_schema  # noqa: E402
 from app.rag.vectorstore import PgVectorStore, format_vector  # noqa: E402
 from backfill_embeddings import _make_embedder  # noqa: E402
 
-DEFAULT_KB_NAME = "劳动法知识库"
-DEFAULT_KB_DESC = "内置《劳动法》《劳动合同法》全文，条款级切分。所有用户可问答。"
+DEFAULT_KB_NAME = "劳动与社会保障法律法规库"
+DEFAULT_KB_DESC = "内置劳动与社会保障领域 13 部法律法规全文，条款级切分。所有用户可问答。"
 
 UPSERT_KB_SQL = """
 INSERT INTO kb (id, name, description, owner_id, is_public)
 VALUES (%s, %s, %s, %s, TRUE)
-ON CONFLICT (id) DO NOTHING
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    description = EXCLUDED.description
 """
 
 UPSERT_CHUNK_SQL = """
@@ -165,17 +167,22 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[ok] 默认库 kb_id={DEFAULT_KB_ID}：{stats['documents']} 个文档 / "
           f"{stats['chunks']} 个切片，本次写入向量 {stats['embedded']} 条")
 
-    # 自校验：内置两部法必须是 2 文档 205 片，否则说明源数据缺失或漏写
+    # 自校验：默认库的文档/切片数必须与 articles 表一致（一部法=一文档，一条法=一片）。
+    # 期望值从数据源实时推导而不硬编码——扩充法域后无需同步改这里。
     with psycopg.connect(settings.database_url) as conn:
         docs, chunks = conn.execute(
             "SELECT count(*) FROM documents WHERE kb_id = %s", (DEFAULT_KB_ID,)
         ).fetchone()[0], conn.execute(
             "SELECT count(*) FROM chunks WHERE kb_id = %s", (DEFAULT_KB_ID,)
         ).fetchone()[0]
-    if (docs, chunks) != (2, 205):
-        print(f"[fail] 自校验失败：期望 2 文档 / 205 片，实际 {docs} / {chunks}", file=sys.stderr)
+        exp_docs, exp_chunks = conn.execute(
+            "SELECT count(DISTINCT law_id), count(*) FROM articles"
+        ).fetchone()
+    if (docs, chunks) != (exp_docs, exp_chunks):
+        print(f"[fail] 自校验失败：articles 有 {exp_docs} 部法 / {exp_chunks} 条，"
+              f"默认库实际 {docs} 文档 / {chunks} 片", file=sys.stderr)
         return 1
-    print("[ok] 自校验通过：2 文档 / 205 切片")
+    print(f"[ok] 自校验通过：{docs} 文档 / {chunks} 切片")
     return 0
 
 
