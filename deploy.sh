@@ -30,12 +30,37 @@ fi
 
 # ---------- 1. 检查 Docker ----------
 if ! command -v docker >/dev/null 2>&1; then
-  log "未检测到 Docker，开始安装..."
-  curl -fsSL https://get.docker.com | sh
+  log "未检测到 Docker，使用阿里云镜像源安装（官方源 download.docker.com 国内被墙）..."
+  apt-get update -qq && apt-get install -y -qq ca-certificates curl >/dev/null
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://mirrors.aliyun.com/docker-ce/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  chmod a+r /etc/apt/keyrings/docker.asc
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://mirrors.aliyun.com/docker-ce/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list
+  apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   systemctl enable --now docker
 else
   log "Docker 已存在：$(docker --version | head -1)"
 fi
+
+# ---------- 1.5 配置镜像加速（国内拉 Docker Hub 镜像必备，否则 build 时拉基础镜像会卡死） ----------
+if [ ! -f /etc/docker/daemon.json ] || ! grep -q registry-mirrors /etc/docker/daemon.json 2>/dev/null; then
+  log "配置 Docker Hub 镜像加速..."
+  mkdir -p /etc/docker
+  cat > /etc/docker/daemon.json <<'MIRROR_EOF'
+{
+  "registry-mirrors": [
+    "https://docker.m.daocloud.io",
+    "https://docker.1ms.run",
+    "https://dockerproxy.net"
+  ]
+}
+MIRROR_EOF
+  systemctl restart docker
+else
+  log "镜像加速已配置"
+fi
+
 docker compose version >/dev/null 2>&1 || { err "Docker Compose 插件不可用，请升级 Docker"; exit 1; }
 
 # ---------- 2. 获取代码 ----------
