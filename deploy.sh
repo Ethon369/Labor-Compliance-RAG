@@ -113,16 +113,22 @@ for i in $(seq 1 60); do
   sleep 2
 done
 
-# ---------- 5. 首次入库（幂等：已入库会跳过/覆盖写） ----------
+# ---------- 5. 首次入库（ingest_laws 写的是 V1 的 articles 表） ----------
 log "检查是否需要初始化法条数据..."
-CHUNKS="$(docker compose -f "$COMPOSE_FILE" exec -T postgres \
-  psql -U labor -d labor -tAc "SELECT count(*) FROM chunks" 2>/dev/null || echo 0)"
-if [ "${CHUNKS:-0}" -gt 0 ] 2>/dev/null; then
-  log "已有 ${CHUNKS} 条切片，跳过入库"
+ARTICLES="$(docker compose -f "$COMPOSE_FILE" exec -T postgres \
+  psql -U labor -d labor -tAc "SELECT count(*) FROM articles" 2>/dev/null || echo 0)"
+if [ "${ARTICLES:-0}" -gt 0 ] 2>/dev/null; then
+  log "已有 ${ARTICLES} 条法条源数据，跳过抓取入库"
 else
-  log "首次入库..."
+  log "首次入库（抓取法条写入 articles 表）..."
   docker compose -f "$COMPOSE_FILE" exec -T app python scripts/ingest_laws.py
 fi
+
+# ---------- 5.5 迁移到默认知识库（关键！V2 检索只查 chunks，缺这步会检索不到任何条文） ----------
+# articles 是 V1 遗留表，检索层统一走 kb→documents→chunks 三层模型。
+# --force-embed 保证 embedding 与当前 EMBEDDING_MODE 一致（换提供方后必须重灌）。
+log "迁移法条到默认知识库（kb→documents→chunks）并灌入向量..."
+docker compose -f "$COMPOSE_FILE" exec -T app python scripts/migrate_default_kb.py --force-embed
 
 # ---------- 6. 健康检查 ----------
 log "健康检查..."
