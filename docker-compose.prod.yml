@@ -17,6 +17,10 @@ services:
   app:
     build: .
     container_name: labor-app
+    # 只读挂载法条数据：更新数据只需 git pull，无需重建镜像
+    # （镜像内也 COPY 了一份作为兜底，挂载目录缺失时仍可启动）
+    volumes:
+      - ./data/raw:/app/data/raw:ro
     # 只绑本机：8000 不进公网，外部一律走 nginx
     ports:
       - "127.0.0.1:8000:8000"
