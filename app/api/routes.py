@@ -289,7 +289,7 @@ async def chat_history(request: Request, page: int = 1, page_size: int = 50):
     """GET /chat/history：返回内存中的会话记录（分页，倒序，最新在前）。
 
     仅返回存于内存的历史；服务重启后清空。
-    个人展示项目不持久化——面试演示场景重启丢失是可接受的。
+    个人展示项目不持久化——演示场景重启丢失是可接受的。
     """
     history: list = request.app.state.history
     page = max(1, page)

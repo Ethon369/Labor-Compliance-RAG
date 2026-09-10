@@ -7,7 +7,7 @@
                                                   └→ refuse -c-> END
 
 verify 之后的条件边是 LangGraph 与 Chain 的本质分界线：它让"下一条走哪"由状态运行时
-决定，Chain 只有写死的下一步。这也是面试"为什么用 Graph"的第一句话。
+决定，Chain 只有写死的下一步——这是"为什么用 Graph"最直接的回答。
 """
 from __future__ import annotations
 

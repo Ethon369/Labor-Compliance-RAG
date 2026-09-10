@@ -1,4 +1,4 @@
-"""抓取并解析《劳动法》《劳动合同法》全文 → data/raw/{law_id}.json（条款级）。
+"""抓取并解析劳动与社会保障法域的法律/行政法规全文 → data/raw/{law_id}.json（条款级）。
 
 数据源选择、解析策略与已知取舍见 docs/decisions/01-法条数据获取与条款切分.md。
 输出结构（入库/检索/引用展示共用同一份）:
@@ -69,6 +69,116 @@ SOURCES: list[LawSource] = [
             66: "临时性、辅助性或者替代性",
             92: "一倍以上五倍以下",
         },
+    ),
+    LawSource(
+        law_id="labor_dispute_law",
+        name="中华人民共和国劳动争议调解仲裁法",
+        # 南澳县人社局转载版（HTTP 明文页，实测结构规整、条文各占一段）
+        url="http://www.nanao.gov.cn/stnarlsbj/gkmlpt/content/1/1469/post_1469186.html",
+        expected_articles=54,
+        closing_text="本法自2008年5月1日起施行",
+        # 2007 年制定后未修正，无现行性哨兵
+    ),
+    LawSource(
+        law_id="social_insurance_law",
+        name="中华人民共和国社会保险法",
+        # 北京市政府门户转载版（2019-01 发布，晚于 2018-12-29 修正）
+        url="https://www.beijing.gov.cn/zhengce/zhengcefagui/qtwj/201901/"
+            "t20190117_780532.html",
+        expected_articles=98,
+        closing_text="本法自2011年7月1日起施行",
+        # 2018-12-29 修改决定动了 57/64/66 三条措辞
+        amendments={
+            57: "市场监督管理部门",                      # 旧版写"工商行政管理部门"
+            64: "除基本医疗保险基金与生育保险基金合并建账及核算外",
+            66: "除基本医疗保险基金与生育保险基金预算合并编制外",
+        },
+    ),
+    LawSource(
+        law_id="labor_contract_law_reg",
+        name="中华人民共和国劳动合同法实施条例",
+        # 中国政府网政策库，2008 年公布后未修订
+        url="https://www.gov.cn/zhengce/content/2008-09/19/content_6630.htm",
+        expected_articles=38,
+        closing_text="本条例自公布之日起施行",
+    ),
+    LawSource(
+        law_id="work_injury_reg",
+        name="工伤保险条例",
+        # 国务院公报页，含 2010-12-20 修订决定 + 修订后全文（现行版）
+        url="https://www.gov.cn/gongbao/content/2011/content_1778064.htm",
+        expected_articles=67,
+        # 末条收尾语取第六十七条的结尾句——该条还含"自2004年1月1日起施行"那句，
+        # 但它不是末句，用它收尾会误判
+        closing_text="按照本条例的规定执行",
+        # 2010 修订动了工伤认定/待遇相关条款，旧版（2003）必然无下列措辞
+        amendments={
+            14: "非本人主要责任",                        # 旧版写"机动车事故伤害"
+            16: "醉酒或者吸毒",                          # 旧版写"醉酒导致伤亡"
+            39: "上一年度全国城镇居民人均可支配收入的20倍",
+        },
+    ),
+    LawSource(
+        law_id="employment_promotion_law",
+        name="中华人民共和国就业促进法",
+        # 中国政府网"国情"栏目（法律全文版块），2015-04-24 修正后的现行文本
+        url="https://www.gov.cn/guoqing/2021-10/29/content_5647636.htm",
+        expected_articles=69,
+        closing_text="本法自2008年1月1日起施行",
+    ),
+    LawSource(
+        law_id="unemployment_insurance_reg",
+        name="失业保险条例",
+        # 福建省政府公报（zfgb）转载国务院令第 258 号
+        url="https://zfgb.fujian.gov.cn/1583",
+        expected_articles=33,
+        # 末条含两句，取末句收尾
+        closing_text="《国有企业职工待业保险规定》同时废止",
+    ),
+    LawSource(
+        law_id="public_inst_personnel_reg",
+        name="事业单位人事管理条例",
+        # 中国政府网政策文件库，国务院令第 652 号
+        url="https://www.gov.cn/zhengce/zhengceku/2014-05/15/content_8810.htm",
+        expected_articles=44,
+        closing_text="本条例自2014年7月1日起施行",
+    ),
+    LawSource(
+        law_id="collective_contract_reg",
+        name="集体合同规定",
+        # 国务院公报页转载劳动和社会保障部令第 22 号
+        url="https://www.gov.cn/gongbao/content/2004/content_62937.htm",
+        expected_articles=57,
+        # 末条含两句，取末句收尾
+        closing_text="《集体合同规定》同时废止",
+    ),
+    LawSource(
+        law_id="labor_supervision_reg",
+        name="劳动保障监察条例",
+        # 中国政府网政策库，国务院令第 423 号
+        url="https://www.gov.cn/zhengce/content/2008-03/28/content_7383.htm",
+        expected_articles=36,
+        closing_text="本条例自2004年12月1日起施行",
+    ),
+    LawSource(
+        law_id="occupational_disease_law",
+        name="中华人民共和国职业病防治法",
+        # 北京市政府门户转载版（2017-11-04 第三次修正）。注：2018-12-29 第四次修正
+        # 仅调整职业卫生监管机构名称，条文实质未变；故不设现行性哨兵
+        url="https://www.beijing.gov.cn/zhengce/zhengcefagui/qtwj/201711/"
+            "t20171104_779851.html",
+        expected_articles=88,
+        closing_text="本法自2002年5月1日起施行",
+    ),
+    LawSource(
+        law_id="female_worker_protection_reg",
+        name="女职工劳动保护特别规定",
+        # 中国政府网法律法规栏目，国务院令第 619 号。正文后附"禁忌劳动范围"附录，
+        # 靠 closing_text 提前终止解析，附录不会并入末条
+        url="https://www.gov.cn/flfg/2012-05/07/content_2131582.htm",
+        expected_articles=16,
+        # 末条含两句，取末句收尾
+        closing_text="《女职工劳动保护规定》同时废止",
     ),
 ]
 
@@ -265,6 +375,11 @@ def parse_document(doc: str, src: LawSource) -> Law:
             break                         # 页脚开始，正文到此为止
         if SKIP_PARAS.match(p) or not _CJK.search(p):
             continue
+        # 收尾语出现即正文结束：其后是站点页脚（导航栏/分享条/推荐位），一律不再并入。
+        # 比穷举页脚停止词可靠——不同站点的页脚首段差异大（gov.cn 是"全国人大"这类
+        # 机构导航，加进 STOP_MARKERS 会误伤正文里的"全国人民代表大会常务委员会"）。
+        if src.closing_text and src.closing_text in "".join(cur_parts):
+            break
         cur_parts.append(p)               # 无条号的续款段并入当前条
 
     commit()

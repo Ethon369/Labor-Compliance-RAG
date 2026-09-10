@@ -30,7 +30,10 @@ Thumbs.db
 .claude/
 *.egg-info/
 
-# 面试 / 求职个人笔记（已移出到项目外，本地保留）
+# 本地个人笔记（已移出到项目外，本地保留）
 _*.md
 _*.txt
 overview.md
+
+# .git 损坏排障期间的仓库备份（本地保留，不入库）
+.git-broken-backup/

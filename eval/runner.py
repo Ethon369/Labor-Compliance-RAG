@@ -4,7 +4,7 @@
     python eval/runner.py                # 离线模式跑一遍（占位向量 + 占位 rerank）
     python eval/runner.py --top-k 10     # 按指定 top-k 评测
 
-输出的对比表给面试官看——三种方法在 50 条问题上的召回率和命中率一目了然。
+输出的对比表用于横向比较——三种方法在 50 条问题上的召回率和命中率一目了然。
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-# ---- 劳动争议智能合规助手 · Docker 镜像 ----
+# ---- 劳动与社会保障 RAG 问答平台 · Docker 镜像 ----
 # 基于 Python 3.11 slim，安装项目依赖 + 应用代码，uvicorn 启动 FastAPI。
 #
 # 为什么不用多阶段构建：项目是纯 Python（无前端构建产物），依赖全在 pip install 阶段，

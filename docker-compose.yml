@@ -1,4 +1,4 @@
-# 劳动争议智能合规助手 · Docker Compose
+# 劳动与社会保障 RAG 问答平台 · Docker Compose
 # 两个服务：app（FastAPI）+ postgres（pgvector）
 # 启动：docker compose up -d
 # 冒烟：curl http://localhost:8000/docs

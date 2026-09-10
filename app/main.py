@@ -72,8 +72,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="劳动争议智能合规助手",
-    description="基于中国劳动法律体系的 RAG 问答系统（检索增强生成）",
+    title="劳动与社会保障 RAG 问答平台",
+    description="面向中国劳动与社会保障法律域的 RAG 问答平台（检索增强生成）",
     version="0.1.0",
     lifespan=lifespan,
 )

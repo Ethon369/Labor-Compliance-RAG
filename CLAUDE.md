@@ -1,4 +1,4 @@
-# 项目：劳动争议智能合规助手（Labor Compliance RAG）
+# 项目：劳动与社会保障 RAG 问答平台（Labor Compliance RAG）
 
 ## 定位
 面向中国劳动法体系的辅助参考工具，不是法律咨询系统；全链路支持离线可复现。

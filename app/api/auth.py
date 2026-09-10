@@ -2,7 +2,7 @@
 
 为什么自制签名 token 而不是引 JWT 库：锁定清单（CLAUDE.md 规则 1）禁止新增依赖；
 HMAC-SHA256 签名 + 过期时间戳对这个规模够用，且原理能用三段话讲清（payload →
-base64url → HMAC 签名），面试更好讲。密码用 PBKDF2-HMAC-SHA256 加盐哈希，
+base64url → HMAC 签名），实现透明可审计。密码用 PBKDF2-HMAC-SHA256 加盐哈希，
 同为标准库，比明文存密码强一个量级。
 """
 from __future__ import annotations

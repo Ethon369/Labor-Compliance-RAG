@@ -1,7 +1,7 @@
 [project]
 name = "labor-compliance-rag"
 version = "0.1.0"
-description = "劳动争议智能合规助手：基于中国劳动法律体系的 RAG 问答系统（个人求职展示项目）"
+description = "劳动与社会保障领域的 RAG 问答平台：内置 13 部法律法规、805 条条文的检索增强问答系统"
 requires-python = ">=3.11"
 dependencies = [
     # 条款级切分入库需要 PG 驱动；psycopg3 为锁定技术栈 PostgreSQL 的配套，见 docs/decisions/02
