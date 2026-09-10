@@ -16,6 +16,18 @@ COMPOSE_FILE="docker-compose.prod.yml"
 log() { printf '\033[36m[deploy]\033[0m %s\n' "$*"; }
 err() { printf '\033[31m[error]\033[0m %s\n' "$*" >&2; }
 
+# ---------- 0. 小内存保护：2G 机器构建镜像时 pip 编译可能 OOM，先垫 swap ----------
+MEM_KB=$(awk '/MemTotal/ {print int($2)}' /proc/meminfo)
+SWAP_KB=$(awk '/SwapTotal/ {print int($2)}' /proc/meminfo)
+if [ "$MEM_KB" -lt 2500000 ] && [ "$SWAP_KB" -lt 1000000 ] && [ ! -f /swapfile ]; then
+  log "检测到小内存机器（$((MEM_KB/1024))MB），创建 2G swap 防构建 OOM..."
+  fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+  chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile
+  grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+elif [ "$SWAP_KB" -ge 1000000 ]; then
+  log "swap 已就绪（$((SWAP_KB/1024))MB）"
+fi
+
 # ---------- 1. 检查 Docker ----------
 if ! command -v docker >/dev/null 2>&1; then
   log "未检测到 Docker，开始安装..."
