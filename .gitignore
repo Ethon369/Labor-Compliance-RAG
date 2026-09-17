@@ -37,3 +37,6 @@ overview.md
 
 # .git 损坏排障期间的仓库备份（本地保留，不入库）
 .git-broken-backup/
+
+# 设计草稿（v0 预览，已被正式页面取代，不入库）
+/design/

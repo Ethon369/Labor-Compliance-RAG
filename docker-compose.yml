@@ -10,6 +10,10 @@ services:
     container_name: labor-app
     ports:
       - "8000:8000"
+    volumes:
+      # 前端静态文件直挂宿主机：改 HTML/CSS/JS 刷新即生效，不必 --build 重建镜像
+      # （后端代码仍烤在镜像里，改 Python 依旧要 up -d --build）
+      - ./app/static:/app/app/static:ro
     environment:
       # Docker 内服务间通信用 service name 作为 host——不是 localhost
       - DATABASE_URL=postgresql://labor:labor@postgres:5432/labor

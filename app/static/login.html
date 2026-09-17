@@ -1,54 +1,73 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="cool" data-density="comfortable">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>登录 · 劳动合规 RAG</title>
+<script>
+/* 首帧前定主题，避免暗色模式下闪一下白屏 */
+(function(){try{var t=localStorage.getItem('lcr_theme');
+if(t==='dark'||(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches))
+document.documentElement.dataset.theme='dark';}catch(e){}})();
+</script>
+<link rel="stylesheet" href="/tokens.css">
 <style>
-  :root {
-    --primary: #4f46e5; --primary-hover: #4338ca;
-    --text: #1e1b4b; --text-muted: #6b7280; --border: #e5e7eb;
+  body{
+    font-family:var(--font-sans); background:var(--paper); color:var(--ink-1);
+    min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px;
+    font-size:var(--fs-body); line-height:1.7; -webkit-font-smoothing:antialiased; text-wrap:pretty;
+    transition:background var(--dur-3) var(--ease-out), color var(--dur-3) var(--ease-out);
   }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
-    background: #f2f3f5; color: var(--text); min-height: 100vh;
-    display: flex; align-items: center; justify-content: center; padding: 24px;
+  .card{
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--r-lg);
+    box-shadow:var(--e3); width:380px; padding:34px 34px 26px;
+    transition:background var(--dur-3) var(--ease-out), border-color var(--dur-3) var(--ease-out);
   }
-  .card {
-    background: #fff; border-radius: 18px; box-shadow: 0 4px 20px rgba(0,0,0,.06);
-    width: 380px; padding: 36px 36px 30px;
+  .logo{
+    width:44px;height:44px;border-radius:var(--r-lg);margin:0 auto 16px;
+    background:var(--accent);color:var(--on-accent);display:grid;place-items:center;
+    box-shadow:var(--e2);
   }
-  .logo { text-align: center; font-size: 40px; margin-bottom: 6px; }
-  h1 { text-align: center; font-size: 20px; margin-bottom: 4px; }
-  .sub { text-align: center; color: var(--text-muted); font-size: 13px; margin-bottom: 22px; }
-  .switch { display: flex; gap: 8px; margin-bottom: 18px; }
-  .switch button {
-    flex: 1; padding: 9px; border: 1px solid var(--border); background: #fff;
-    border-radius: 9px; cursor: pointer; font-size: 14px; color: var(--text-muted);
+  h1{font-size:var(--fs-h1);font-weight:500;letter-spacing:-.015em;text-align:center;}
+  .sub{text-align:center;color:var(--ink-3);font-size:var(--fs-xs);margin:6px 0 22px;}
+
+  .switch{display:flex;background:var(--surface-2);border-radius:var(--r-md);padding:3px;gap:3px;margin-bottom:18px;}
+  .switch button{
+    flex:1;padding:7px;border-radius:5px;font-size:var(--fs-sm);color:var(--ink-3);
+    transition:background var(--dur-1) var(--ease-out),color var(--dur-1) var(--ease-out);
   }
-  .switch button.active { border-color: var(--primary); color: var(--primary); background: #eef2ff; }
-  input {
-    width: 100%; border: 1px solid var(--border); border-radius: 10px;
-    padding: 11px 14px; font-size: 14px; margin-bottom: 10px; outline: none;
+  .switch button.active{background:var(--surface);color:var(--ink-1);box-shadow:var(--e1);}
+
+  input{
+    width:100%;border:1px solid var(--line-2);border-radius:var(--r-md);
+    padding:11px 14px;font-size:var(--fs-sm);margin-bottom:10px;outline:none;
+    background:var(--surface);color:var(--ink-1);
+    transition:border-color var(--dur-2) var(--ease-out),box-shadow var(--dur-2) var(--ease-out);
   }
-  input:focus { border-color: var(--primary); }
-  .submit {
-    width: 100%; background: var(--primary); color: #fff; border: none; border-radius: 10px;
-    padding: 12px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 4px;
+  input::placeholder{color:var(--ink-4);}
+  input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-ring);}
+
+  .submit{
+    width:100%;background:var(--accent);color:var(--on-accent);border-radius:var(--r-md);
+    padding:11px;font-size:var(--fs-sm);font-weight:500;margin-top:4px;
+    transition:background var(--dur-1) var(--ease-out);
   }
-  .submit:hover { background: var(--primary-hover); }
-  .err { color: #dc2626; font-size: 13px; min-height: 20px; margin-bottom: 6px; }
-  .ok { color: #16a34a; font-size: 13px; min-height: 20px; margin-bottom: 6px; }
-  .back { text-align: center; margin-top: 18px; }
-  .back a { color: var(--text-muted); font-size: 13px; text-decoration: none; }
-  .back a:hover { color: var(--primary); }
-  .hint { color: var(--text-muted); font-size: 12px; line-height: 1.6; margin-bottom: 14px; }
+  .submit:hover{background:var(--accent-hover);}
+  .err{color:var(--danger);font-size:var(--fs-xs);min-height:20px;margin-bottom:4px;}
+  .ok{color:var(--success);font-size:var(--fs-xs);min-height:20px;margin-bottom:4px;}
+  .hint{color:var(--ink-4);font-size:var(--fs-micro);line-height:1.6;margin-top:10px;}
+  .back{text-align:center;margin-top:16px;}
+  .back a{color:var(--ink-3);font-size:var(--fs-xs);text-decoration:none;transition:color var(--dur-1) var(--ease-out);}
+  .back a:hover{color:var(--accent);}
 </style>
 </head>
 <body>
 <div class="card">
-  <div class="logo">⚖️</div>
+  <div class="logo">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 7h16M12 7v13M8.5 20h7M7 7l-3 6h6zM17 7l-3 6h6z"/>
+    </svg>
+  </div>
   <h1>劳动合规 RAG</h1>
   <p class="sub">登录后可管理知识库并长期保存会话</p>
 
@@ -70,7 +89,25 @@
   <div class="back"><a href="/">← 返回问答页</a></div>
 </div>
 
+<div class="tw" id="tw" data-open="false">
+  <button class="tw-fab" id="twFab" aria-label="切换主题">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 3a9 9 0 109 9 7 7 0 01-9-9z"/></svg>
+  </button>
+  <div class="tw-panel">
+    <h3>外观</h3>
+    <div class="tw-row">
+      <label>主题</label>
+      <div class="seg" data-key="theme">
+        <button data-val="cool" aria-pressed="true">冷白工具</button>
+        <button data-val="dark" aria-pressed="false">深墨暗色</button>
+      </div>
+    </div>
+    <p class="tw-note">跟随系统深色偏好，选择会记住。</p>
+  </div>
+</div>
+
 <script src="/common.js"></script>
+<script src="/theme.js"></script>
 <script>
 'use strict';
 const $ = id => document.getElementById(id);
